@@ -20,9 +20,12 @@ def parse_time(value):
         raise ValueError("Timestamp must have timezone")
     return dt.astimezone(timezone.utc)
 
-def snapshot(s):
+def snapshot(s, price=None):
     return {"symbol": s.symbol, "realized": s.realized, "trades": s.trades,
-            "locked": s.locked, "position": s.position, "history": s.history}
+            "locked": s.locked, "position": s.position, "history": s.history,
+            "unrealized": s.unrealized(price) if price is not None and s.position else 0.0,
+            "max_daily_loss": s.risk.max_daily_loss, "stop_brl": s.risk.stop_brl,
+            "max_trades": s.risk.max_trades}
 
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
@@ -81,7 +84,7 @@ class Handler(SimpleHTTPRequestHandler):
                         result = sim.emergency_stop(price, timestamp)
                     else:
                         raise ValueError("Unknown action")
-                return self.send_json(200, {"state": snapshot(sim), "result": result})
+                return self.send_json(200, {"state": snapshot(sim, price if action != "state" else None), "result": result})
         except (ValueError, KeyError, TypeError, RuntimeError, OverflowError) as exc:
             return self.send_json(400, {"error": str(exc)})
 
