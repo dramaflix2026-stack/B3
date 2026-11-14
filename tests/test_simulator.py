@@ -1,0 +1,32 @@
+import unittest
+from datetime import datetime
+from simulator import Simulator, Risk
+
+T = datetime(2026, 11, 14, 10, 0)
+class SimulatorTests(unittest.TestCase):
+    def test_win_pnl(self):
+        s=Simulator("WIN",Risk(slippage_ticks=0))
+        s.open("buy",1,130000,T)
+        self.assertEqual(s.close(130050,T)["net"],10)
+    def test_wdo_pnl(self):
+        s=Simulator("WDO",Risk(slippage_ticks=0))
+        s.open("sell",1,5000,T)
+        self.assertEqual(s.close(4999,T)["net"],10)
+    def test_daily_lock(self):
+        s=Simulator("WIN",Risk(max_daily_loss=10,slippage_ticks=0))
+        s.open("buy",1,130000,T)
+        s.close(129950,T)
+        with self.assertRaises(RuntimeError): s.open("buy",1,130000,T)
+    def test_stop(self):
+        s=Simulator("WIN",Risk(stop_brl=10,slippage_ticks=0))
+        s.open("buy",1,130000,T)
+        self.assertEqual(s.mark(129950,T)["reason"],"stop")
+    def test_trade_limit(self):
+        s=Simulator("WIN",Risk(max_trades=1,slippage_ticks=0))
+        s.open("buy",1,130000,T);s.close(130005,T)
+        with self.assertRaises(RuntimeError): s.open("buy",1,130000,T)
+    def test_emergency(self):
+        s=Simulator("WIN",Risk())
+        s.emergency_stop(130000,T)
+        with self.assertRaises(RuntimeError): s.open("buy",1,130000,T)
+if __name__ == "__main__": unittest.main()
