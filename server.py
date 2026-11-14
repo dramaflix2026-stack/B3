@@ -8,6 +8,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 from simulator import Simulator, Risk
+import robot_engine
 
 ROOT = Path(__file__).resolve().parent
 sessions = {}
@@ -43,6 +44,9 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
+        if path == "/api/robots":
+            with robot_engine.GUARD:
+                return self.send_json(200, robot_engine.public(robot_engine.load()))
         if path == "/api/health":
             return self.send_json(200, {"ok": True, "live_feed": False, "real_orders": False})
         if path.startswith("/api/"):
@@ -50,6 +54,14 @@ class Handler(SimpleHTTPRequestHandler):
         return super().do_GET()
 
     def do_POST(self):
+        if urlparse(self.path).path == "/api/robots":
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 0 < length <= MAX_BODY: return self.send_json(413, {"error": "Invalid request size"})
+                data = json.loads(self.rfile.read(length))
+                return self.send_json(200, robot_engine.command(data.get("action"), data.get("robot"), data.get("settings")))
+            except (ValueError, KeyError, TypeError) as exc:
+                return self.send_json(400, {"error": str(exc)})
         if urlparse(self.path).path != "/api/paper":
             return self.send_json(404, {"error": "Unknown endpoint"})
         try:
@@ -90,4 +102,5 @@ class Handler(SimpleHTTPRequestHandler):
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8000"))
+    robot_engine.start()
     ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()
