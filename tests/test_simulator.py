@@ -29,4 +29,22 @@ class SimulatorTests(unittest.TestCase):
         s=Simulator("WIN",Risk())
         s.emergency_stop(130000,T)
         with self.assertRaises(RuntimeError): s.open("buy",1,130000,T)
+    def test_unrealized_includes_exit_slippage_and_fees(self):
+        s=Simulator("WIN",Risk(slippage_ticks=1,fee_per_side_per_contract=0.5))
+        s.open("buy",1,130000,T)
+        self.assertEqual(s.unrealized(130000),-3)
+    def test_daily_limit_triggers_intratrade(self):
+        s=Simulator("WIN",Risk(max_daily_loss=5,stop_brl=100,slippage_ticks=0))
+        s.open("buy",1,130000,T)
+        self.assertEqual(s.mark(129975,T)["reason"],"stop")
+        self.assertTrue(s.locked)
+    def test_invalid_price_rejected(self):
+        s=Simulator("WIN",Risk())
+        for price in (float("nan"),float("inf"),130001):
+            with self.assertRaises(ValueError):
+                s.open("buy",1,price,T)
+    def test_invalid_risk_rejected(self):
+        for risk in (Risk(slippage_ticks=-1),Risk(max_daily_loss=0),Risk(fee_per_side_per_contract=-1)):
+            with self.assertRaises(ValueError):
+                Simulator("WIN",risk)
 if __name__ == "__main__": unittest.main()
