@@ -422,6 +422,68 @@ class PaperV7Tests(unittest.TestCase):
         finally:
             paper.DATA=original_data
 
+    def test_guard_approves_accounting_on_startup(self):
+        from paper_v7_guard import check
+        data_dir = self._auditable_source()
+        report = check(self.state, paper.PAPER, data_dir)
+        self.assertEqual(report["status"], "passed", report)
+        self.assertEqual(report["checks_passed"], report["checks_total"])
+        self.assertGreater(report["checks_total"], 10)
+        paper.atomic_save(self.state)
+        self.assertEqual(paper._load()["audit_guard"]["status"], "passed")
+        self.assertEqual(self.state["frozen"]["control_decision"], "cash")
+
+    def test_guard_skips_until_15_new_closed_minutes(self):
+        from paper_v7_guard import check
+        data_dir = self._auditable_source()
+        first = check(self.state, paper.PAPER, data_dir)
+        start_ms = first["last_candle_ms"]
+        for i in range(1, 15):
+            paper.process_candle(self.state, candle(start_ms + i*MINUTE))
+        self.assertIsNone(check(self.state, paper.PAPER, data_dir))
+        paper.process_candle(self.state, candle(start_ms + 15*MINUTE))
+        due = check(self.state, paper.PAPER, data_dir)
+        self.assertIsNotNone(due)
+        self.assertEqual(due["status"], "passed", due)
+        self.assertEqual(due["last_candle_ms"], start_ms+15*MINUTE)
+        self.assertEqual(self.state["frozen"]["control_decision"], "cash")
+
+    def test_guard_fail_closed_on_account_tampering(self):
+        from paper_v7_guard import check
+        data_dir=self._auditable_source()
+        self.state["cash"] += 50
+        guard=check(self.state, paper.PAPER, data_dir)
+        self.assertEqual(guard["status"],"failed")
+        self.assertIn("cash_reconciliation",guard["failures"])
+        self.assertEqual(self.state["phase"],"paused_accounting_audit")
+        paper.atomic_save(self.state)
+        from paper_v7_daily import alerts
+        signal=alerts(self.state,{"phase":"running"},self.state["last_ms"]+MINUTE,
+                      {"status":"complete"})
+        self.assertIn("accounting_audit_failed",[x["code"] for x in signal["active"]])
+        self.assertGreater(signal["critical"],0)
+
+    def test_guard_fail_closed_on_frozen_report_change(self):
+        from paper_v7_guard import check
+        data_dir=self._auditable_source()
+        (data_dir/"v7"/"test-only.json").write_bytes(b'adulterated')
+        report=check(self.state,paper.PAPER,data_dir)
+        self.assertEqual(report["status"],"failed")
+        self.assertIn("source_checksum",report["failures"])
+        self.assertEqual(self.state["phase"],"paused_accounting_audit")
+
+    def test_guard_persists_failure_and_does_not_resume_automatically(self):
+        from paper_v7_guard import check
+        data_dir=self._auditable_source()
+        self.state["cash"]+=20
+        failure=check(self.state,paper.PAPER,data_dir)
+        paper.atomic_save(self.state)
+        stored=paper._load()
+        self.assertEqual(stored["audit_guard"],failure)
+        self.assertEqual(stored["phase"],"paused_accounting_audit")
+        self.assertIsNone(check(stored,paper.PAPER,data_dir))
+        self.assertEqual(stored["phase"],"paused_accounting_audit")
+
     def test_atomic_persistence_and_readonly_snapshot(self):
         paper.atomic_save(self.state)
         self.assertEqual(paper._load()["activation_ms"], self.state["activation_ms"])
