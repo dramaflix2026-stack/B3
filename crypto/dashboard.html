@@ -113,6 +113,24 @@ a:hover{text-decoration:underline}
   <div class="verdict" id="v9Verdict">—</div>
   <div class="meta" id="v9Meta">O replay não altera o monitoramento prospectivo da V7.</div>
  </section>
+ <section class="card v8-card" aria-label="Teste disponível V10">
+  <div class="version-top"><span class="version">V10</span><span class="tag">● Disponível</span></div>
+  <p>Descubra <strong>por que o robô não entra</strong>: cada candle histórico é classificado pela primeira condição que bloqueia o sinal, sem alterar a estratégia.</p>
+  <button class="primary" id="testV10" type="button">▶ Testar V10</button>
+  <div class="hint">Diagnóstico de sinais · Sem mudar regras · Sem dinheiro real.</div>
+ </section>
+ <section class="result" id="v10Result" hidden aria-live="polite">
+  <div class="result-head"><div><h2>Resultado do teste V10</h2><p id="v10Time">Por que não houve entradas?</p></div><span id="v10Status" class="result-pill">Verificando</span></div>
+  <div class="metrics">
+   <div class="metric"><span class="key">Candles analisados</span><strong id="v10Candles">—</strong><small id="v10Source">Histórico BTC/USDT</small></div>
+   <div class="metric"><span class="key">Verificações</span><strong id="v10Checks">—</strong><small>Conciliação com o motor congelado</small></div>
+   <div class="metric"><span class="key">Sinais naturais</span><strong id="v10Signals">—</strong><small id="v10Blocked">—</small></div>
+   <div class="metric"><span class="key">Principal bloqueio</span><strong id="v10Main">—</strong><small id="v10MainCount">—</small></div>
+  </div>
+  <div id="v10Funnel" class="v8-scenarios"></div>
+  <div class="verdict" id="v10Verdict">—</div>
+  <div class="meta" id="v10Meta">Contagens de primeira barreira são exclusivas por candle; falhas em qualquer etapa podem se sobrepor.</div>
+ </section>
 </main>
 <footer><span>BTC Scalper AI · Somente paper trading</span><a href="/laboratorio">Histórico técnico</a></footer>
 </div>
@@ -237,7 +255,38 @@ async function testV9(){
  }finally{button.disabled=false;button.textContent='↻ Testar V9 novamente'}
 }
 byId('testV8').addEventListener('click',testV8);
+
+async function testV10(){
+ const button=byId('testV10');button.disabled=true;button.textContent='Diagnosticando sinais…';
+ byId('v10Result').hidden=false;set('v10Status','Executando');
+ byId('v10Status').className='result-pill';set('v10Time','Analisando condições de entrada…');
+ try{
+  const response=await fetch('/test-v10',{method:'POST',cache:'no-store'});
+  const data=await response.json();
+  if(!response.ok||data.version!=='V10')throw Error(data.error||'Diagnóstico V10 não concluído');
+  const ok=data.status==='passed'&&data.checks_passed===data.checks_total&&data.reconciles_to_frozen_engine===true&&data.signals_forced===false&&data.writes_v7_state===false&&data.executes_exchange_orders===false;
+  set('v10Status',ok?'Diagnóstico OK':'REVISAR');byId('v10Status').className='result-pill'+(ok?'':' fail');
+  set('v10Time','Teste em '+new Date().toLocaleString('pt-BR',{dateStyle:'short',timeStyle:'short'})+' · Dados históricos');
+  set('v10Candles',integer(data.candles_analyzed));set('v10Source','Binance Vision · '+data.source_month);
+  set('v10Checks',data.checks_passed+' / '+data.checks_total);
+  set('v10Signals',integer(data.natural_signals));
+  set('v10Blocked',integer(data.atr_blocked)+' barrados pelo ATR · '+integer(data.trades_closed)+' trades fechados');
+  const steps=data.funnel||[];
+  const biggest=steps.reduce((a,b)=>Number(b.first_blocked)>Number(a?.first_blocked??-1)?b:a,null);
+  set('v10Main',biggest?biggest.id==='trend_ma'?'Tendência':biggest.id==='volatility'?'Volatilidade':biggest.id==='above_slow'?'MA720':biggest.id==='breakout'?'Rompimento':biggest.id==='not_extended'?'Extensão':biggest.id==='available'?'Em posição': 'ATR':'—');
+  set('v10MainCount',biggest?integer(biggest.first_blocked)+' candles pararam aqui':'—');
+  byId('v10Funnel').innerHTML=steps.map((step,i)=>'<div class="scenario"><div class="scenario-head"><strong>'+escapeText((i+1)+'. '+step.label)+'</strong><span>'+integer(step.passed)+' passaram</span></div><small>Primeira barreira: <b>'+integer(step.first_blocked)+'</b> · Falhou em qualquer etapa: '+integer(step.failed_any)+'</small></div>').join('');
+  set('v10Verdict',!ok?'A conciliação com o motor congelado falhou; não aprovar este teste.':Number(data.natural_signals)===0?'Nenhum sinal completo neste período. O funil mostra a primeira condição que impediu cada entrada, sem alterar os parâmetros.':'O funil encontrou sinais naturais e conciliou as contagens com o motor congelado.');
+  set('v10Meta','Regra ATR congelada · Histórico já analisado · Não otimiza parâmetros · Nenhuma ordem real · V7–V9 preservadas.');
+  set('status',ok?'● V10 · DIAGNÓSTICO OK':'● V10 · REVISAR');
+ }catch(error){
+  set('v10Time','Falha no diagnóstico');set('v10Status','ERRO');byId('v10Status').className='result-pill fail';
+  set('v10Candles','—');set('v10Checks','—');set('v10Signals','—');set('v10Main','—');byId('v10Funnel').textContent='';
+  set('v10Verdict','V10 não concluída: '+error.message+'.');set('status','● V10 · INDISPONÍVEL');
+ }finally{button.disabled=false;button.textContent='↻ Testar V10 novamente'}
+}
 byId('testV9').addEventListener('click',testV9);
+byId('testV10').addEventListener('click',testV10);
 </script>
 </body>
 </html>
