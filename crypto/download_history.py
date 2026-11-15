@@ -17,7 +17,9 @@ def fetch(url):
  with urllib.request.urlopen(req,timeout=90) as response:return response.read()
 def run(start,end,out,symbol):
  out.mkdir(parents=True,exist_ok=True)
- manifest_path=out/f"{symbol}-manifest.json"\n manifest=json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else []\n manifest=[entry for entry in manifest if (out/pathlib.Path(entry["file"]).name).exists()]
+ manifest_path=out/f"{symbol}-manifest.json"
+ manifest=json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else []
+ manifest=[entry for entry in manifest if (out/pathlib.Path(entry["file"]).name).exists()]
  for month in months(start,end):
   name=f"{symbol}-1m-{month}.zip"; url=f"{BASE}/{symbol}/1m/{name}"
   dest=out/f"{symbol}-1m-{month}.csv"
@@ -43,7 +45,8 @@ def run(start,end,out,symbol):
        timestamp=dt.datetime.fromtimestamp(ms/1000,dt.timezone.utc)
        o,h,l,c,v=map(float,row[1:6])
        if min(o,h,l,c)<=0 or v<0 or h<max(o,c) or l>min(o,c):raise ValueError("OHLCV inválido")
-       if previous is not None and ms<=previous:raise ValueError("Candles fora de ordem ou duplicados")\n       if previous is not None and ms-previous!=60000:gaps.append({"after_ms":previous,"before_ms":ms,"missing_candles":(ms-previous)//60000-1})
+       if previous is not None and ms<=previous:raise ValueError("Candles fora de ordem ou duplicados")
+       if previous is not None and ms-previous!=60000:gaps.append({"after_ms":previous,"before_ms":ms,"missing_candles":(ms-previous)//60000-1})
        previous=ms;first=first or timestamp;last=timestamp
        writer.writerow([timestamp.isoformat().replace("+00:00","Z"),row[1],row[2],row[3],row[4],row[5]])
        count+=1
@@ -55,6 +58,7 @@ def run(start,end,out,symbol):
    print(f"OK {month}: {count} candles, {len(gaps)} lacunas registradas")
   except (urllib.error.HTTPError,urllib.error.URLError,ValueError,zipfile.BadZipFile) as e:
    print(f"FALHOU {month}: {e}")
- print("Concluído. Arquivos mensais disponíveis em",out)\n print("Meses validados:",len(manifest),"/",len(list(months(start,end))))
+ print("Concluído. Arquivos mensais disponíveis em",out)
+ print("Meses validados:",len(manifest),"/",len(list(months(start,end))))
 if __name__=="__main__":
  p=argparse.ArgumentParser();p.add_argument("--start",default="2021-11");p.add_argument("--end",default="2026-10");p.add_argument("--out",type=pathlib.Path,default=pathlib.Path("data/crypto"));p.add_argument("--symbol",choices=["BTCUSDT","ETHUSDT"],default="BTCUSDT");a=p.parse_args();run(a.start,a.end,a.out,a.symbol)
