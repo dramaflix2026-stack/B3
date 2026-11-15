@@ -95,6 +95,22 @@ def diagnostics(state, worker_state, now_ms):
             "fees_usdt_all": _round(state["fees"]),
             "slippage_usdt_all": _round(state["slippage"]),
             "max_closed_trade_drawdown_usdt_recent": _round(max_closed_drawdown),
+            "equity_risk_tracking_since_utc": (
+                dt.datetime.fromtimestamp(state["equity_monitoring_started_ms"]/1000, dt.timezone.utc).isoformat()
+                if state.get("equity_monitoring_started_ms") is not None else None),
+            "peak_closed_candle_equity_usdt": (
+                _round(state["equity_peak_usdt"]) if "equity_peak_usdt" in state else None),
+            "max_closed_candle_drawdown_usdt": (
+                _round(state["max_close_drawdown_usdt"])
+                if "max_close_drawdown_usdt" in state else None),
+            "max_closed_candle_drawdown_pct": (
+                round(float(state["max_close_drawdown_pct"]), 3)
+                if "max_close_drawdown_pct" in state else None),
+            "recent_daily_close_equity_utc": list(state.get("daily_close_equity_utc", []))[-30:],
+            "closed_candle_drawdown_note": (
+                "Drawdown amostrado no fechamento de candles de 1 minuto desde o início indicado. "
+                "Considera posição aberta marcada no fechamento, mas não os mínimos intraminuto "
+                "nem custos hipotéticos de liquidação. Não representa drawdown completo de execução."),
             "daily_utc_recent": _daily(trades),
             "sufficient_sample": total_trades >= 100,
             "sample_warning": ("Nenhuma operação virtual ainda; não há taxa de acerto ou fator de lucro para avaliar."
@@ -109,6 +125,6 @@ def diagnostics(state, worker_state, now_ms):
                   "require_new_candles": True},
         "caveats": ("Resultados retrospectivos V7 não são validação inédita. "
                     "Estatísticas de trades consideram no máximo os últimos 500 fechamentos e "
-                    "drawdown em negócios fechados não captura oscilações intratrade. "
+                    "drawdown por fechamento de 1 minuto não inclui variações intraminuto ou custos de liquidação. "
                     "Paper trading não modela livro de ofertas, liquidez ou latência."),
     }
