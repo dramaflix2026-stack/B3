@@ -19,6 +19,7 @@ from collections import deque
 from paper_v7_analytics import diagnostics as paper_diagnostics
 from paper_v7_journal import sync_archive, archive_status, page as archive_page, source_fingerprint
 from paper_v7_daily import record_candle as record_daily_candle, status as daily_status, alerts as daily_alerts
+from paper_v7_audit import audit as audit_v7_account
 
 DATA = pathlib.Path(os.getenv("CRYPTO_DATA_DIR", "/data/crypto"))
 PAPER = DATA / "paper-v7"
@@ -399,6 +400,17 @@ def journal_page(page_num=1, size=20):
             "control_decision": state["frozen"]["control_decision"],
             "ledger": archive_page(state, PAPER, page_num=page_num, page_size=size),
         }
+
+def audit_snapshot():
+    """Read-only snapshot of independently reconciled paper-account accounting."""
+    with LOCK:
+        state = _load()
+        if state is None:
+            return {"status": "awaiting_feed", "message": "Aguardando primeiro candle."}
+        result = audit_v7_account(state, PAPER, DATA)
+        result["source_fingerprint"] = source_fingerprint(state)
+        result["control_decision"] = state["frozen"]["control_decision"]
+        return result
 
 def iteration():
     with LOCK:
