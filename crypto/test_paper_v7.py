@@ -150,6 +150,57 @@ class PaperV7Tests(unittest.TestCase):
         self.assertEqual(self.state["last_close_equity_usdt"], 900.)
         self.assertEqual(len(self.state["daily_close_equity_utc"]), 1)
 
+    def test_immutable_archive_and_page_are_replay_safe(self):
+        from paper_v7_journal import archive_status, page, sync_archive
+        self.state["pending"] = {"atr": .2, "atr_pct": .2, "signal_ms": self.state["last_ms"]}
+        nxt = candle(self.state["last_ms"]+MINUTE, o=100., h=100.2, l=98, c=99)
+        paper.process_candle(self.state, nxt)
+        paper.atomic_save(self.state)
+        archived = archive_status(self.state, paper.PAPER)
+        self.assertEqual(archived["status"], "complete")
+        self.assertEqual(archived["archived"], 1)
+        self.assertEqual(page(self.state, paper.PAPER)["records"][0]["sequence"], 1)
+        # Replaying a save and restart must not create another ledger item.
+        restored = paper._load()
+        sync_archive(restored, paper.PAPER)
+        paper.atomic_save(restored)
+        self.assertEqual(archive_status(restored, paper.PAPER)["archived"], 1)
+        self.assertEqual(paper.journal_page()["ledger"]["total"], 1)
+        self.assertEqual(paper.journal_page()["control_decision"], "cash")
+
+    def test_archived_trade_conflict_blocks_new_processing(self):
+        from paper_v7_journal import sync_archive
+        self.state["pending"] = {"atr": .2, "atr_pct": .2, "signal_ms": self.state["last_ms"]}
+        paper.process_candle(self.state, candle(self.state["last_ms"]+MINUTE, o=100, h=100.2, l=98.0, c=99.0))
+        paper.atomic_save(self.state)
+        self.state["trades"][0]["net_usdt"] = 999999
+        with self.assertRaises(ValueError):
+            sync_archive(self.state, paper.PAPER)
+
+    def test_archive_paging_does_not_truncate_trade_history(self):
+        from paper_v7_journal import archive_status, page, sync_archive
+        example = {"entry_utc":"2026-11-15T00:00:00Z", "exit_utc":"2026-11-15T00:01:00Z",
+                   "net_usdt":1., "commissions_usdt":.1, "slippage_usdt":.01}
+        self.state["trades"] = [dict(example, sequence_metadata=i) for i in range(25)]
+        self.state["total_trades"] = 25
+        sync_archive(self.state, paper.PAPER)
+        self.assertEqual(archive_status(self.state,paper.PAPER)["archived"],25)
+        first = page(self.state, paper.PAPER, page_num=1, page_size=20)
+        second = page(self.state, paper.PAPER, page_num=2, page_size=20)
+        self.assertEqual([r["sequence"] for r in first["records"]],list(range(25,5,-1)))
+        self.assertEqual([r["sequence"] for r in second["records"]],list(range(5,0,-1)))
+        self.assertEqual(first["status"],"complete")
+        self.assertEqual(second["status"],"complete")
+
+    def test_partial_archive_is_explicitly_not_complete(self):
+        from paper_v7_journal import archive_status, page
+        self.state["trades"] = [{"net_usdt": -1}]
+        self.state["total_trades"] = 2
+        self.assertEqual(archive_status(self.state,paper.PAPER)["missing"],2)
+        result=page(self.state,paper.PAPER)
+        self.assertEqual(result["status"],"partial")
+        self.assertEqual(result["missing_sequences"],[2,1])
+
     def test_atomic_persistence_and_readonly_snapshot(self):
         paper.atomic_save(self.state)
         self.assertEqual(paper._load()["activation_ms"], self.state["activation_ms"])
