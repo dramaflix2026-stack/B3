@@ -17,6 +17,7 @@ BREAKOUT_BUFFERS=(0.0,0.001,0.002,0.004,0.006)
 WARMUP=721
 
 def _signal(closes, ranges, close, buffer):
+    closes=list(closes)
     fast=sum(closes[-60:])/60
     mid=sum(closes[-240:])/240
     slow=sum(closes)/720
