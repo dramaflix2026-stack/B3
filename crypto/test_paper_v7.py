@@ -484,49 +484,62 @@ class PaperV7Tests(unittest.TestCase):
         self.assertIsNone(check(stored,paper.PAPER,data_dir))
         self.assertEqual(stored["phase"],"paused_accounting_audit")
 
-    def test_v7_first_dashboard_archives_history_without_deleting_sources(self):
+    def test_minimal_version_test_dashboard_and_historical_preservation(self):
         from html.parser import HTMLParser
-        html = pathlib.Path(__file__).with_name("dashboard.html").read_text(encoding="utf-8")
-        class Collector(HTMLParser):
+        main = pathlib.Path(__file__).with_name("dashboard.html").read_text(encoding="utf-8")
+        legacy = pathlib.Path(__file__).with_name("dashboard_legacy.html").read_text(encoding="utf-8")
+        class Page(HTMLParser):
             def __init__(self):
                 super().__init__()
-                self.ids = []
-                self.details = []
-                self.depth = 0
-                self.v7_inside_archive = False
-                self.archived_controls = []
-                self.v7_ids = {"paperpanel", "paperstatus", "paperaudit",
-                               "paperjournal", "v7headfeed", "v7headcandles"}
+                self.ids=[]
+                self.buttons=[]
             def handle_starttag(self, tag, attrs):
-                attrs = dict(attrs)
-                if tag == "details" and attrs.get("id") == "historical-research":
-                    self.depth += 1
-                    self.details.append("historical-research")
-                elif tag == "details":
-                    self.details.append(attrs.get("id") or "other")
-                value = attrs.get("id")
-                if value:
-                    self.ids.append(value)
-                    if "historical-research" in self.details and value in self.v7_ids:
-                        self.v7_inside_archive = True
-                    if "historical-research" in self.details and value in {"runbtn", "v5btn", "v6btn", "labrobot", "ledgerrobot"}:
-                        self.archived_controls.append(value)
-            def handle_endtag(self, tag):
-                if tag == "details" and self.details:
-                    self.details.pop()
-        doc=Collector()
-        doc.feed(html)
-        self.assertFalse(doc.v7_inside_archive)
-        self.assertIn("historical-research", html)
-        self.assertIn("Estudo histórico V7", html)
-        for value in doc.v7_ids:
-            self.assertEqual(doc.ids.count(value), 1, value)
-        self.assertEqual(len(doc.ids), len(set(doc.ids)), "Duplicate HTML IDs")
-        self.assertTrue({"runbtn", "v5btn", "v6btn", "labrobot", "ledgerrobot"}.issubset(set(doc.archived_controls)))
-        self.assertLess(html.index('class="v7-overview"'), html.index('id="historical-research"'))
-        self.assertLess(html.index('id="paperstatus"'), html.index('id="historical-research"'))
-        self.assertIn("loadPaperV7();", html)
-        self.assertIn("setInterval(loadPaperV7,30000)", html)
+                attrs=dict(attrs)
+                if attrs.get("id"):
+                    self.ids.append(attrs["id"])
+                if tag=="button":
+                    self.buttons.append(attrs)
+        page=Page();page.feed(main)
+        self.assertEqual(len(page.ids),len(set(page.ids)))
+        self.assertEqual(len(page.buttons),1,"Main panel has exactly one test button")
+        self.assertEqual(page.buttons[0].get("id"),"testV7")
+        self.assertIn("▶ Testar V7",main)
+        self.assertIn('id="testResult" hidden',main)
+        self.assertIn("fetch('/paper-v7'",main)
+        self.assertIn("fetch('/paper-v7-audit'",main)
+        self.assertIn("V8",main)
+        self.assertIn("Indisponível",main)
+        self.assertNotIn("Testar V8",main)
+        self.assertNotIn('id="runbtn"',main)
+        self.assertNotIn('id="labrobot"',main)
+        self.assertIn('href="/laboratorio"',main)
+        self.assertIn('id="runbtn"',legacy)
+        self.assertIn('id="labrobot"',legacy)
+        self.assertIn("V6 · Pesquisa",legacy)
+        self.assertIn("V7 · Observação",legacy)
+
+    def test_html_routes_expose_simple_test_and_legacy_archive(self):
+        import http.server
+        import threading
+        import urllib.request
+        import collector_service
+        server=http.server.ThreadingHTTPServer(("127.0.0.1",0),collector_service.Handler)
+        thread=threading.Thread(target=server.serve_forever,daemon=True)
+        thread.start()
+        try:
+            base="http://127.0.0.1:"+str(server.server_address[1])
+            with urllib.request.urlopen(base+"/",timeout=4) as response:
+                self.assertEqual(response.status,200)
+                html=response.read().decode()
+                self.assertIn('id="testV7"',html)
+                self.assertNotIn('id="runbtn"',html)
+            with urllib.request.urlopen(base+"/laboratorio",timeout=4) as response:
+                self.assertEqual(response.status,200)
+                html=response.read().decode()
+                self.assertIn('id="runbtn"',html)
+                self.assertIn("V7 · Observação",html)
+        finally:
+            server.shutdown();server.server_close();thread.join(3)
 
     def test_atomic_persistence_and_readonly_snapshot(self):
         paper.atomic_save(self.state)
