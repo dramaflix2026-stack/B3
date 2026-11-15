@@ -13,7 +13,7 @@ HOLD=720
 COOLDOWN=360
 MIN_VOL=.008
 MIN_EDGE=.006
-def test(on_progress=None, robot_ids=None, settings=None, windows=None, diagnostics=False):
+def test(on_progress=None, robot_ids=None, settings=None, windows=None, diagnostics=False, trade_log=None):
  settings=settings or {}
  stop=float(settings.get("stop_pct",STOP*100))/100
  edge=float(settings.get("min_edge_pct",MIN_EDGE*100))/100
@@ -34,6 +34,7 @@ def test(on_progress=None, robot_ids=None, settings=None, windows=None, diagnost
   for window_index,(start,end) in enumerate(periods):
    cash=START_CASH;btc=0.;entry=0.;entry_fee=0.;opened=-1;cool=0;pending=False
    tranges=deque(maxlen=14);rsi_changes=deque(maxlen=14);previous_close=None;entry_stop_pct=stop;recovery_armed=False
+   pending_context=None;entry_context=None;entry_time=None;entry_open=None
    closes=deque(maxlen=720);prev_ms=None;trades=0;wins=0;fees=0.;gross=0.;peak=START_CASH;maxdd=0.;gaps=0;halted=False
    index=0;last_close=None;first_open=None;sum60=0.;sum240=0.;sum720=0.
    exits={name:{"trades":0,"wins":0,"net_usdt":0.,"fees_usdt":0.} for name in ("stop_loss","take_profit","max_hold","window_end","data_gap")}
@@ -51,7 +52,7 @@ def test(on_progress=None, robot_ids=None, settings=None, windows=None, diagnost
       if min(o,h,l,c)<=0 or h<max(o,c) or l>min(o,c):raise ValueError("Invalid OHLC")
       discontinuity=prev_ms is not None and ms-prev_ms!=60000
       if discontinuity:
-       gaps+=1;closes.clear();tranges.clear();rsi_changes.clear();previous_close=None;recovery_armed=False;pending=False;sum60=sum240=sum720=0.
+       gaps+=1;closes.clear();tranges.clear();rsi_changes.clear();previous_close=None;recovery_armed=False;pending=False;pending_context=None;sum60=sum240=sum720=0.
       prev_ms=ms
       if pending and not btc and not halted:
        price=o*(1+SLIP)
@@ -60,6 +61,7 @@ def test(on_progress=None, robot_ids=None, settings=None, windows=None, diagnost
        if quantity*price>=5 and quantity>0:
         entry=price;btc=quantity;entry_fee=quantity*price*FEE
         cash-=quantity*price+entry_fee;fees+=entry_fee;opened=i;entry_regime=regime
+        if trade_log is not None:entry_context=dict(pending_context or {});entry_time=ts;entry_open=o
        pending=False
       if btc:
        stop_price=entry*(1-entry_stop_pct)
@@ -72,6 +74,18 @@ def test(on_progress=None, robot_ids=None, settings=None, windows=None, diagnost
        if exit_raw is not None:
         exit_price=exit_raw*(1-SLIP);proceeds=btc*exit_price;exit_fee=proceeds*FEE
         pnl=proceeds-exit_fee-btc*entry-entry_fee
+        if trade_log is not None:
+         qty=btc;commissions=entry_fee+exit_fee
+         slippage_cost=qty*((entry-entry_open)+(exit_raw-exit_price))
+         raw_pnl=qty*(exit_raw-entry_open)
+         trade_log.append({"robot":k_id,"window":window_index+1,"entry_time_utc":entry_time,"exit_time_utc":ts,
+          "entry_candle":opened,"exit_candle":i,"duration_minutes":i-opened,"signal":entry_context,
+          "regime_on_entry":entry_regime,"raw_entry_open_usdt":round(entry_open,6),"entry_price_usdt":round(entry,6),
+          "raw_exit_usdt":round(exit_raw,6),"exit_price_usdt":round(exit_price,6),"btc_quantity":round(qty,10),
+          "notional_usdt":round(qty*entry,4),"stop_pct":round(entry_stop_pct*100,4),"exit_reason":exit_reason,
+          "gross_before_costs_usdt":round(raw_pnl,6),"gross_after_slippage_usdt":round(qty*(exit_price-entry),6),
+          "entry_fee_usdt":round(entry_fee,6),"exit_fee_usdt":round(exit_fee,6),"commissions_usdt":round(commissions,6),
+          "slippage_usdt":round(slippage_cost,6),"net_usdt":round(pnl,6),"is_win":pnl>0})
         cash+=proceeds-exit_fee;fees+=exit_fee;gross+=btc*(exit_price-entry)
         wins+=pnl>0;trades+=1;btc=0.;cool=max(cooldown,1440 if k==2 else 720)
         if diagnostics:
@@ -122,6 +136,12 @@ def test(on_progress=None, robot_ids=None, settings=None, windows=None, diagnost
          if recovery_armed and c>p[-2] and 38<rsi<55 and c<mid*.989 and volatility>=.009 and mid/c-1>.011:
           pending=True;recovery_armed=False
          if c>mid or rsi>60:recovery_armed=False
+        if pending and trade_log is not None:
+         pending_context={"signal_time_utc":ts,"signal_close_usdt":round(c,4),"regime":regime,
+          "volatility_240_pct":round(volatility*100,4),"momentum_60_pct":round(momentum*100,4),
+          "rsi_14":round(rsi,3) if k==2 else None,"atr_14_pct":round(atr/c*100,4),
+          "ma_fast_60":round(fast,4),"ma_mid_240":round(mid,4),"ma_slow_720":round(slow,4),
+          "prior_high_240":round(prior_high,4)}
       last_close=c
     if index>=end:break
    equity=cash+btc*(last_close or 0)
