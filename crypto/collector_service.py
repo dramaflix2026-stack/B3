@@ -395,10 +395,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
   self.send_response(code);self.send_header("Content-Type","application/json");self.send_header("Content-Length",str(len(body)));self.end_headers();self.wfile.write(body)
  def do_GET(self):
   path=urllib.parse.urlsplit(self.path).path
-  if path not in ("/","/health","/status","/backtest","/backtest-v2","/backtest-v3","/experiment-status","/experiments","/windows","/v5","/v6","/cost-audit","/trade-ledger","/trade-diagnostics","/entry-quality","/v7","/paper-v7","/paper-v7-journal","/paper-v7-audit"):
+  if path not in ("/","/laboratorio","/health","/status","/backtest","/backtest-v2","/backtest-v3","/experiment-status","/experiments","/windows","/v5","/v6","/cost-audit","/trade-ledger","/trade-diagnostics","/entry-quality","/v7","/paper-v7","/paper-v7-journal","/paper-v7-audit"):
    self.send_error(404);return
-  if path=="/":
-   body=(pathlib.Path(__file__).parent/"dashboard.html").read_bytes()
+  if path in ("/","/laboratorio"):
+   body=(pathlib.Path(__file__).parent/("dashboard_legacy.html" if path=="/laboratorio" else "dashboard.html")).read_bytes()
    self.send_response(200);self.send_header("Content-Type","text/html; charset=utf-8");self.send_header("Content-Length",str(len(body)));self.end_headers();self.wfile.write(body);return
   manifest=DATA/"BTCUSDT-manifest.json"
   records=json.loads(manifest.read_text()) if manifest.exists() else []
