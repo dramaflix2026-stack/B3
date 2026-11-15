@@ -4,6 +4,7 @@ import datetime as dt,glob,http.server,json,os,pathlib,threading,time,traceback,
 from download_history import run
 from spot_backtest_v4 import test
 from spot_backtest_v5 import test as test_v5
+from spot_backtest_v6 import test as test_v6
 DATA=pathlib.Path(os.environ.get("CRYPTO_DATA_DIR","/data/crypto"))
 START=os.environ.get("CRYPTO_START","2021-11")
 END=os.environ.get("CRYPTO_END","2026-10")
@@ -49,7 +50,7 @@ def execute_backtest():
 def start_backtest():
  with lock:
   if status.get("phase")!="complete":return 409,{"error":"Histórico ainda não está pronto"}
-  if status.get("backtest")=="running":return 409,{"error":"Já existe um teste em execução"}
+  if status.get("backtest")=="running" or experiment_status.get("state")=="running":return 409,{"error":"Já existe um teste em execução"}
   if time.monotonic()-last_run[0]<3600:return 429,{"error":"Aguarde 60 minutos entre execuções"}
   last_run[0]=time.monotonic()
   status.update(backtest="running",backtest_robot_completed=0)
@@ -126,6 +127,30 @@ def execute_v5():
  except Exception as e:
   experiment_status.update(state="error",error=str(e))
   traceback.print_exc()
+def execute_v6():
+ try:
+  result=test_v6(lambda robot,pct:experiment_status.update(progress_pct=round(pct,1),current_robot=robot),windows="five",diagnostics=True)
+  result["created_at"]=dt.datetime.now(dt.timezone.utc).isoformat()
+  folder=DATA/"v6"
+  folder.mkdir(parents=True,exist_ok=True)
+  identifier=dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%f")
+  tmp=folder/(identifier+".tmp")
+  tmp.write_text(json.dumps(result,ensure_ascii=False,indent=2))
+  tmp.replace(folder/(identifier+".json"))
+  experiment_status.update(state="complete",progress_pct=100,result_id=identifier,error=None)
+  print("V6 WALK FORWARD RESEARCH COMPLETE",identifier,flush=True)
+ except Exception as e:
+  experiment_status.update(state="error",error=str(e))
+  traceback.print_exc()
+def start_v6():
+ with experiment_lock:
+  if status.get("phase")!="complete":return 409,{"error":"Histórico ainda não está pronto"}
+  if experiment_status.get("state")=="running" or status.get("backtest")=="running":return 409,{"error":"Já existe uma análise em execução"}
+  if time.monotonic()-experiment_last_run[0]<60:return 429,{"error":"Aguarde um minuto entre análises"}
+  experiment_last_run[0]=time.monotonic()
+  experiment_status.update(state="running",mode="v6",progress_pct=0,current_robot=8,error=None)
+  threading.Thread(target=execute_v6,daemon=True).start()
+  return 202,{"status":"running","message":"V6: três estratégias, cinco janelas e avaliação cronológica"}
 def start_v5():
  with experiment_lock:
   if status.get("phase")!="complete":return 409,{"error":"Histórico ainda não está pronto"}
@@ -211,8 +236,9 @@ def start_experiment(payload):
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_POST(self):
   path=urllib.parse.urlsplit(self.path).path
-  if path not in ("/run-backtest","/run-experiment","/run-batch","/run-windows","/run-v5"):self.send_error(404);return
-  if path=="/run-v5":code,payload=start_v5()
+  if path not in ("/run-backtest","/run-experiment","/run-batch","/run-windows","/run-v5","/run-v6"):self.send_error(404);return
+  if path=="/run-v6":code,payload=start_v6()
+  elif path=="/run-v5":code,payload=start_v5()
   elif path in ("/run-experiment","/run-batch","/run-windows"):
    try:
     length=int(self.headers.get("Content-Length","0"))
@@ -227,7 +253,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
   self.send_response(code);self.send_header("Content-Type","application/json");self.send_header("Content-Length",str(len(body)));self.end_headers();self.wfile.write(body)
  def do_GET(self):
   path=urllib.parse.urlsplit(self.path).path
-  if path not in ("/","/health","/status","/backtest","/backtest-v2","/backtest-v3","/experiment-status","/experiments","/windows","/v5"):
+  if path not in ("/","/health","/status","/backtest","/backtest-v2","/backtest-v3","/experiment-status","/experiments","/windows","/v5","/v6"):
    self.send_error(404);return
   if path=="/":
    body=(pathlib.Path(__file__).parent/"dashboard.html").read_bytes()
@@ -236,6 +262,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
   records=json.loads(manifest.read_text()) if manifest.exists() else []
   payload={**status,"months_verified":len(records),"candles_verified":sum(x["rows"] for x in records),"gap_events":sum(len(x.get("gaps",[])) for x in records),"last_month":records[-1]["month"] if records else None,"note":"Historical research only; no live trading"}
   if path=="/experiment-status":payload=experiment_status.copy()
+  if path=="/v6":
+   folder=DATA/"v6"
+   items=sorted(folder.glob("*.json"),reverse=True)[:3] if folder.exists() else []
+   payload={"runs":[{"id":p.stem,**json.loads(p.read_text())} for p in items]}
   if path=="/v5":
    folder=DATA/"v5"
    items=sorted(folder.glob("*.json"),reverse=True)[:3] if folder.exists() else []
