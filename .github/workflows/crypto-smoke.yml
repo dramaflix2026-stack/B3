@@ -1,0 +1,35 @@
+name: Crypto historical data smoke test
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Download one verified month
+        run: python crypto/download_history.py --start 2024-01 --end 2024-01 --out data/crypto
+      - name: Require a verified month
+        run: |
+          python - <<'PY'
+          import json,pathlib
+          p=pathlib.Path('data/crypto/BTCUSDT-manifest.json')
+          assert p.exists(), 'Nenhum histórico validado'
+          m=json.loads(p.read_text())
+          assert len(m)==1 and m[0]['rows']>40000, m
+          print('Candles validados:',m[0]['rows'])
+          PY
+      - name: Run simulated four-robot backtest
+        run: python crypto/backtest.py --data 'data/crypto/BTCUSDT-1m-*.csv'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: btcusdt-2024-01-verified
+          path: |
+            data/crypto/BTCUSDT-1m-2024-01.csv
+            data/crypto/BTCUSDT-manifest.json
+          retention-days: 7
