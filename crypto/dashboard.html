@@ -147,6 +147,22 @@ a:hover{text-decoration:underline}
   <div class="verdict" id="v11Verdict">—</div>
   <div class="meta" id="v11Meta">Comparações são retrospectivas; não escolher uma variante pelo maior lucro nesta mesma amostra.</div>
  </section>
+ <section class="card v8-card" aria-label="Teste disponível V12">
+  <div class="version-top"><span class="version">V12</span><span class="tag">● Disponível</span></div>
+  <p><strong>Diagnóstico de perdas:</strong> mostra saídas por stop ou tempo, ganhos e perdas médios, taxas, slippage e comportamento dos candles após as entradas.</p>
+  <button class="primary" id="testV12" type="button">▶ Testar V12</button>
+  <div class="hint">Análise retrospectiva · Sem mudar a V7 · Sem ordens reais.</div>
+ </section>
+ <section class="result" id="v12Result" hidden aria-live="polite">
+  <div class="result-head"><div><h2>Resultado do teste V12</h2><p id="v12Time">Diagnóstico das operações simuladas</p></div><span id="v12Status" class="result-pill">Verificando</span></div>
+  <div class="metrics">
+   <div class="metric"><span class="key">Candles históricos</span><strong id="v12Candles">—</strong><small id="v12Source">BTC/USDT M1</small></div>
+   <div class="metric"><span class="key">Auditoria contábil</span><strong id="v12Checks">—</strong><small>Conciliação das operações</small></div>
+  </div>
+  <div id="v12Rows" class="v8-scenarios"></div>
+  <div class="verdict" id="v12Verdict">—</div>
+  <div class="meta" id="v12Meta">MFE/MAE usam a máxima e a mínima da vela inteira, não são preços necessariamente negociáveis.</div>
+ </section>
 </main>
 <footer><span>BTC Scalper AI · Somente paper trading</span><a href="/laboratorio">Histórico técnico</a></footer>
 </div>
@@ -327,7 +343,32 @@ async function testV11(){
  }finally{button.disabled=false;button.textContent='↻ Testar V11 novamente'}
 }
 byId('testV10').addEventListener('click',testV10);
+
+async function testV12(){
+ const button=byId('testV12');button.disabled=true;button.textContent='Investigando operações…';
+ byId('v12Result').hidden=false;set('v12Status','Executando');byId('v12Status').className='result-pill';
+ set('v12Time','Conferindo stop, tempo, taxas e saldo…');
+ try{
+  const response=await fetch('/test-v12',{method:'POST',cache:'no-store'});
+  const data=await response.json();
+  if(!response.ok||data.version!=='V12')throw Error(data.error||'Diagnóstico indisponível');
+  const ok=data.status==='passed'&&data.checks_passed===data.checks_total&&data.writes_v7_state===false&&data.executes_exchange_orders===false&&data.changes_strategy===false;
+  set('v12Status',ok?'Diagnóstico OK':'REVISAR');byId('v12Status').className='result-pill'+(ok?'':' fail');
+  set('v12Time','Teste em '+new Date().toLocaleString('pt-BR',{dateStyle:'short',timeStyle:'short'})+' · Histórico conhecido');
+  set('v12Candles',integer(data.candles_analyzed));set('v12Source','Binance Vision · '+data.source_month);
+  set('v12Checks',data.checks_passed+' / '+data.checks_total);
+  byId('v12Rows').innerHTML=(data.variants||[]).map(x=>'<div class="scenario"><div class="scenario-head"><strong>Rompimento +'+escapeText(String(x.buffer_pct).replace(".",","))+'%</strong><span>'+integer(x.trades_closed)+' operações</span></div><small>Stop: '+integer(x.stop_count)+' · Tempo: '+integer(x.time_count)+' · Acertos: '+(x.win_rate_pct===null?'—':escapeText(String(x.win_rate_pct))+'%')+'</small><small>Ganho médio: '+(x.average_win_usdt===null?'—':money(x.average_win_usdt))+' · Perda média: '+(x.average_loss_usdt===null?'—':money(x.average_loss_usdt))+'</small><small>Bruto: '+money(x.closed_gross_before_fees_usdt)+' · Taxas: '+money(x.closed_fees_usdt)+' · Slippage estimado: '+money(x.closed_slippage_usdt)+'</small><small>Resultado líquido fechado: <b>'+money(x.closed_net_usdt)+'</b> · Duração média: '+(x.average_holding_minutes===null?'—':escapeText(String(x.average_holding_minutes))+' min')+'</small><small>Excursão média por vela (MFE / MAE): '+(x.average_mfe_bar_pct===null?'—':escapeText(String(x.average_mfe_bar_pct))+'%')+' / '+(x.average_mae_bar_pct===null?'—':escapeText(String(x.average_mae_bar_pct))+'%')+'</small></div>').join('');
+  set('v12Verdict',ok?'Operações e custos conciliados. Os números explicam as perdas simuladas, mas não autorizam alterar parâmetros nem usar dinheiro real.':'Falha na auditoria das operações. Não aprovar este teste.');
+  set('v12Meta','A excursão MFE/MAE usa a vela inteira e pode incluir movimentos posteriores à saída. Histórico previamente analisado · V7–V11 preservadas.');
+  set('status',ok?'● V12 · DIAGNÓSTICO OK':'● V12 · REVISAR');
+ }catch(error){
+  set('v12Time','Falha no diagnóstico');set('v12Status','ERRO');byId('v12Status').className='result-pill fail';
+  set('v12Candles','—');set('v12Checks','—');byId('v12Rows').textContent='';
+  set('v12Verdict','V12 não concluída: '+error.message+'.');set('status','● V12 · INDISPONÍVEL');
+ }finally{button.disabled=false;button.textContent='↻ Testar V12 novamente'}
+}
 byId('testV11').addEventListener('click',testV11);
+byId('testV12').addEventListener('click',testV12);
 </script>
 </body>
 </html>
