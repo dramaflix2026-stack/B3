@@ -5,6 +5,7 @@ from download_history import run
 from spot_backtest_v4 import test
 from spot_backtest_v5 import test as test_v5
 from spot_backtest_v6 import test as test_v6
+from cost_edge_audit import analyze as analyze_cost_edge
 DATA=pathlib.Path(os.environ.get("CRYPTO_DATA_DIR","/data/crypto"))
 START=os.environ.get("CRYPTO_START","2021-11")
 END=os.environ.get("CRYPTO_END","2026-10")
@@ -253,7 +254,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
   self.send_response(code);self.send_header("Content-Type","application/json");self.send_header("Content-Length",str(len(body)));self.end_headers();self.wfile.write(body)
  def do_GET(self):
   path=urllib.parse.urlsplit(self.path).path
-  if path not in ("/","/health","/status","/backtest","/backtest-v2","/backtest-v3","/experiment-status","/experiments","/windows","/v5","/v6"):
+  if path not in ("/","/health","/status","/backtest","/backtest-v2","/backtest-v3","/experiment-status","/experiments","/windows","/v5","/v6","/cost-audit"):
    self.send_error(404);return
   if path=="/":
    body=(pathlib.Path(__file__).parent/"dashboard.html").read_bytes()
@@ -262,6 +263,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
   records=json.loads(manifest.read_text()) if manifest.exists() else []
   payload={**status,"months_verified":len(records),"candles_verified":sum(x["rows"] for x in records),"gap_events":sum(len(x.get("gaps",[])) for x in records),"last_month":records[-1]["month"] if records else None,"note":"Historical research only; no live trading"}
   if path=="/experiment-status":payload=experiment_status.copy()
+  if path=="/cost-audit":
+   folder=DATA/"v6"
+   items=sorted(folder.glob("*.json"),reverse=True)[:1] if folder.exists() else []
+   if items:
+    try:
+     payload=analyze_cost_edge(json.loads(items[0].read_text()))
+     payload["source_report_id"]=items[0].stem
+    except (ValueError,KeyError,TypeError) as exc:
+     payload={"status":"error","error":"Relatório V6 inválido: "+str(exc)}
+   else:payload={"status":"missing","message":"Execute a pesquisa V6 antes da auditoria de custos."}
   if path=="/v6":
    folder=DATA/"v6"
    items=sorted(folder.glob("*.json"),reverse=True)[:3] if folder.exists() else []
