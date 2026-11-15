@@ -93,7 +93,7 @@ def test(on_progress=None, robot_ids=None, settings=None, windows=None, diagnost
       atr=sum(tranges)/len(tranges)
       closes.append(c)
       sum60+=c;sum240+=c;sum720+=c
-      if on_progress and i%50000==0:on_progress(k+1,((progress_index*len(periods)+window_index+(i-start)/(end-start))/(len(selected)*len(periods)))*100)
+      if on_progress and i%50000==0:on_progress(k_id,((progress_index*len(periods)+window_index+(i-start)/(end-start))/(len(selected)*len(periods)))*100)
       if diagnostics and len(closes)>=720:
        df=sum60/60;dm=sum240/240;ds=sum720/720
        regime="uptrend" if df>dm>ds else "downtrend" if df<dm<ds else "sideways"
@@ -131,8 +131,8 @@ def test(on_progress=None, robot_ids=None, settings=None, windows=None, diagnost
      bucket["net_usdt"]=round(bucket["net_usdt"],2);bucket["fees_usdt"]=round(bucket["fees_usdt"],2)
    trade_diagnostics=({"exit_reasons":exits,"avg_win_usdt":round(winning_sum/winning_count,2) if winning_count else None,"avg_loss_usdt":round(losing_sum/losing_count,2) if losing_count else None,"profit_factor":round(winning_sum/abs(losing_sum),3) if losing_sum<0 else None,"net_per_trade_usdt":round((winning_sum+losing_sum)/trades,3) if trades else None,"completed_trades":trades} if diagnostics else None)
    out.append({"trade_diagnostics":trade_diagnostics,"regime_diagnostics":regimes if diagnostics else None,"buy_hold_net_usdt":round(benchmark_net,2),"net_usdt":round(equity-START_CASH,2),"ending_equity_usdt":round(equity,2),"trades":trades,"win_rate_pct":round(100*wins/trades,2) if trades else 0,"max_realized_drawdown_usdt":round(maxdd,2),"fees_usdt":round(fees,2),"gross_usdt":round(gross,2),"gap_events":gaps,"risk_halt":halted})
-  robots[str(k+1)]=({"windows":[{"index":j+1,"start_candle":a,"end_candle_exclusive":b,**out[j]} for j,(a,b) in enumerate(periods)]} if windows=="five" else {"development":out[0],"validation":out[1]})
-  if on_progress:on_progress(k+1,(progress_index+1)/len(selected)*100.)
+  robots[str(k_id)]=({"windows":[{"index":j+1,"start_candle":a,"end_candle_exclusive":b,**out[j]} for j,(a,b) in enumerate(periods)]} if windows=="five" else {"development":out[0],"validation":out[1]})
+  if on_progress:on_progress(k_id,(progress_index+1)/len(selected)*100.)
   print(f"V5 BACKTEST robot {k_id}/7 complete",flush=True)
  return {"status":"complete","version":"spot-v5-experimental-five-windows" if windows=="five" else "spot-v5-experimental","candles":total,"months":len(files),"assumptions":{"capital_usdt":START_CASH,"spot_only":True,"shorts":False,"fee_rate_per_side":FEE,"slippage_fraction_per_side":SLIP,"stop_pct":stop*100,"risk_budget_pct":RISK*100,"max_position_allocation_pct":MAX_ALLOC*100,"halt_at_equity_usdt":500,"split":"Five chronological nonoverlapping windows, fixed parameters; NOT a true walk-forward retraining or untouched out-of-sample" if windows=="five" else "70% development / 30% previously inspected validation; NOT untouched out-of-sample","min_volatility_60m_pct":MIN_VOL*100,"min_edge_pct":edge*100,"cooldown_minutes":cooldown,"max_hold_minutes":hold,"caveats":"Exploratory OHLC simulation, no orderbook/latency; stop gap slippage may exceed threshold; no real trading"},"robots":robots,"settings":settings,"selected_robots":selected,"diagnostics_enabled":diagnostics,"strategy_names":{"5":"Confirmed breakout","6":"ATR stop breakout","7":"Oversold recovery"}}
 if __name__=="__main__":print(json.dumps(test(),indent=2))
