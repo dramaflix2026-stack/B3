@@ -16,6 +16,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections import deque
+from paper_v7_analytics import diagnostics as paper_diagnostics
 
 DATA = pathlib.Path(os.getenv("CRYPTO_DATA_DIR", "/data/crypto"))
 PAPER = DATA / "paper-v7"
@@ -138,6 +139,7 @@ def new_state(ready_candles, freeze):
         "btc": 0.0, "entry": None, "pending": None,
         "cool": 0, "fees": 0.0, "slippage": 0.0,
         "realized": 0.0, "processed": 0, "signals": 0, "blocked": 0,
+        "total_trades": 0,
         "trades": [], "events": [],
         "feed_last_success_utc": now_iso(),
         "error": None,
@@ -233,6 +235,7 @@ def process_candle(state, candle):
                 "atr_signal_pct": round(p["atr_signal_pct"], 6),
             })
             state["trades"] = state["trades"][-500:]
+            state["total_trades"] = int(state.get("total_trades", len(state["trades"])-1)) + 1
             state["btc"] = 0.0
             state["entry"] = None
             state["cool"] = COOLDOWN_MINUTES
@@ -300,10 +303,11 @@ def snapshot():
                 "processed_new_candles": state["processed"],
                 "signals": state["signals"], "blocked_by_atr": state["blocked"],
                 "open_position": state["entry"],
-                "trades": len(state["trades"]),
+                "trades": int(state.get("total_trades", len(state["trades"]))),
                 "recent_trades": state["trades"][-12:][::-1],
                 "recent_events": state["events"][-12:][::-1],
             },
+"            "diagnostics": paper_diagnostics(state, worker, int(time.time()*1000)),
             "warning": "Sem ordens reais. Conta virtual experimental não aprovada para negociar. "
                        "Sem reotimização automática. Apenas candles novos e fechados.",
         }
