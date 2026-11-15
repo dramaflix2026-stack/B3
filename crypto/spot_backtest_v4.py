@@ -31,14 +31,13 @@ def test(on_progress=None):
       i=index;index+=1
       if i<start:continue
       if i>=end:break
+      ts=row["timestamp"];ms=int(datetime.datetime.fromisoformat(ts.replace("Z","+00:00")).timestamp()*1000)
       o,h,l,c=[float(row[x]) for x in ("open","high","low","close")]
       if min(o,h,l,c)<=0 or h<max(o,c) or l>min(o,c):raise ValueError("Invalid OHLC")
+      discontinuity=prev_ms is not None and ms-prev_ms!=60000
       if discontinuity:
        gaps+=1;closes.clear();pending=False
       prev_ms=ms
-      ts=row["timestamp"];ms=int(datetime.datetime.fromisoformat(ts.replace("Z","+00:00")).timestamp()*1000)
-      discontinuity=prev_ms is not None and ms-prev_ms!=60000
-      if discontinuity:pending=False
       if pending and not btc and not halted:
        price=o*(1+SLIP)
        quantity=min(cash*MAX_ALLOC/price,cash*RISK/(price*STOP),cash/(price*(1+FEE)))
