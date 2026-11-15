@@ -9,7 +9,7 @@ from cost_edge_audit import analyze as analyze_cost_edge
 from trade_diagnostics import analyze as analyze_trade_diagnostics
 from entry_quality import analyze as analyze_entry_quality
 from v7_atr_walkforward import run as run_v7_atr
-from paper_v7 import loop as paper_v7_loop, snapshot as paper_v7_snapshot, journal_page as paper_v7_journal_page
+from paper_v7 import loop as paper_v7_loop, snapshot as paper_v7_snapshot, journal_page as paper_v7_journal_page, audit_snapshot as paper_v7_audit_snapshot
 DATA=pathlib.Path(os.environ.get("CRYPTO_DATA_DIR","/data/crypto"))
 START=os.environ.get("CRYPTO_START","2021-11")
 END=os.environ.get("CRYPTO_END","2026-10")
@@ -395,7 +395,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
   self.send_response(code);self.send_header("Content-Type","application/json");self.send_header("Content-Length",str(len(body)));self.end_headers();self.wfile.write(body)
  def do_GET(self):
   path=urllib.parse.urlsplit(self.path).path
-  if path not in ("/","/health","/status","/backtest","/backtest-v2","/backtest-v3","/experiment-status","/experiments","/windows","/v5","/v6","/cost-audit","/trade-ledger","/trade-diagnostics","/entry-quality","/v7","/paper-v7","/paper-v7-journal"):
+  if path not in ("/","/health","/status","/backtest","/backtest-v2","/backtest-v3","/experiment-status","/experiments","/windows","/v5","/v6","/cost-audit","/trade-ledger","/trade-diagnostics","/entry-quality","/v7","/paper-v7","/paper-v7-journal","/paper-v7-audit"):
    self.send_error(404);return
   if path=="/":
    body=(pathlib.Path(__file__).parent/"dashboard.html").read_bytes()
@@ -405,6 +405,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
   payload={**status,"months_verified":len(records),"candles_verified":sum(x["rows"] for x in records),"gap_events":sum(len(x.get("gaps",[])) for x in records),"last_month":records[-1]["month"] if records else None,"note":"Historical research only; no live trading"}
   if path=="/experiment-status":payload=experiment_status.copy()
   if path=="/paper-v7":payload=paper_v7_snapshot()
+  if path=="/paper-v7-audit":payload=paper_v7_audit_snapshot()
   if path=="/paper-v7-journal":
    try:
     params=urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
