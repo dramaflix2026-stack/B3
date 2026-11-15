@@ -3,7 +3,7 @@ import csv,glob,json,os,pathlib
 from collections import deque
 from backtest import signal
 DATA=pathlib.Path(os.getenv("CRYPTO_DATA_DIR","/data/crypto"))
-def test():
+def test(on_progress=None):
  files=sorted(glob.glob(str(DATA/"BTCUSDT-1m-*.csv")))
  if len(files)!=60:raise ValueError(f"Expected 60 months; found {len(files)}")
  total=sum(max(0,sum(1 for _ in open(f,encoding="utf-8"))-1) for f in files)
@@ -45,5 +45,7 @@ def test():
     if j>=end:break
    segments.append({"net_usdt":round(balance-1000,2),"trades":trades,"win_rate_pct":round(wins/trades*100,2) if trades else 0,"max_realized_drawdown_usdt":round(dd,2),"fees_usdt":round(fees,2),"gross_usdt":round(gross,2)})
   results[str(k+1)]={"development":segments[0],"validation":segments[1]}
+  if on_progress:on_progress(k+1)
+  print(f"BACKTEST robot {k+1}/4 completed",flush=True)
  return {"status":"complete","candles":total,"months":len(files),"assumptions":{"capital_usdt":1000,"quantity_btc":.001,"fee_rate_per_side":.001,"slippage_usdt_per_btc_per_side":2,"stop_target_usdt":5,"split":"70% development / 30% validation","shorts":"hypothetical short positions; not executable on spot","caveats":"exploratory only; no funding, spread, orderbook, borrow or latency modeling"},"robots":results}
 if __name__=="__main__":print(json.dumps(test(),ensure_ascii=False,indent=2))
