@@ -72,6 +72,58 @@ def execute_experiment(robot,settings):
  except Exception as e:
   experiment_status.update(state="error",error=str(e))
   traceback.print_exc()
+def execute_batch(robot,variants):
+ try:
+  folder=DATA/"experiments"
+  folder.mkdir(parents=True,exist_ok=True)
+  completed=[]
+  for idx,settings in enumerate(variants):
+   experiment_status.update(batch_current=idx+1,progress_pct=round(idx/len(variants)*100,1))
+   def progress(k,pct):
+    experiment_status.update(progress_pct=round((idx+pct/100)/len(variants)*100,1),current_robot=k)
+   result=test(progress,robot_ids=[robot],settings=settings)
+   result["experiment_created_at"]=dt.datetime.now(dt.timezone.utc).isoformat()
+   result["batch_index"]=idx+1
+   result["batch_total"]=len(variants)
+   identifier=dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%f")
+   tmp=folder/(identifier+".tmp")
+   tmp.write_text(json.dumps(result,ensure_ascii=False,indent=2))
+   tmp.replace(folder/(identifier+".json"))
+   completed.append(identifier)
+  experiment_status.update(state="complete",progress_pct=100,batch_completed=len(completed),result_ids=completed,error=None)
+  print("BATCH COMPLETE",robot,len(completed),flush=True)
+ except Exception as e:
+  experiment_status.update(state="error",error=str(e))
+  traceback.print_exc()
+def start_batch(payload):
+ try:
+  robot=int(payload.get("robot"))
+  if robot not in (1,2,3,4):raise ValueError("Robô inválido")
+  variants=payload.get("variants")
+  if not isinstance(variants,list) or len(variants)!=3:raise ValueError("São necessárias 3 configurações")
+  bounds={"stop_pct":(0.5,5.),"min_edge_pct":(0.1,3.),"cooldown_minutes":(30,1440),"max_hold_minutes":(60,2880)}
+  validated=[]
+  for item in variants:
+   if not isinstance(item,dict):raise ValueError("Configuração inválida")
+   settings={}
+   for key,(lo,hi) in bounds.items():
+    value=float(item[key])
+    if not lo<=value<=hi:raise ValueError(key+" fora dos limites")
+    if key.endswith("minutes"):
+     if not value.is_integer():raise ValueError(key+" deve ser inteiro")
+     value=int(value)
+    settings[key]=value
+   validated.append(settings)
+  if len({json.dumps(x,sort_keys=True) for x in validated})!=3:raise ValueError("Configurações devem ser distintas")
+ except (ValueError,TypeError,KeyError,OverflowError) as e:return 400,{"error":"Parâmetros inválidos: "+str(e)}
+ with experiment_lock:
+  if status.get("phase")!="complete":return 409,{"error":"Histórico ainda não está pronto"}
+  if experiment_status.get("state")=="running" or status.get("backtest")=="running":return 409,{"error":"Já existe um teste em execução"}
+  if time.monotonic()-experiment_last_run[0]<60:return 429,{"error":"Aguarde um minuto entre baterias"}
+  experiment_last_run[0]=time.monotonic()
+  experiment_status.update(state="running",mode="batch",batch_total=3,batch_current=1,progress_pct=0,current_robot=robot,error=None)
+  threading.Thread(target=execute_batch,args=(robot,validated),daemon=True).start()
+  return 202,{"status":"running","message":"Bateria de 3 testes iniciada"}
 def start_experiment(payload):
  try:
   robot=int(payload.get("robot"))
@@ -91,14 +143,14 @@ def start_experiment(payload):
   if experiment_status.get("state")=="running" or status.get("backtest")=="running":return 409,{"error":"Já existe um backtest em execução"}
   if time.monotonic()-experiment_last_run[0]<60:return 429,{"error":"Aguarde um minuto entre experimentos"}
   experiment_last_run[0]=time.monotonic()
-  experiment_status.update(state="running",progress_pct=0,current_robot=robot,result_id=None,error=None)
+  experiment_status.update(state="running",mode="single",progress_pct=0,current_robot=robot,result_id=None,error=None)
   threading.Thread(target=execute_experiment,args=(robot,settings),daemon=True).start()
   return 202,{"status":"running","message":"Experimento iniciado"}
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_POST(self):
   path=urllib.parse.urlsplit(self.path).path
-  if path not in ("/run-backtest","/run-experiment"):self.send_error(404);return
-  if path=="/run-experiment":
+  if path not in ("/run-backtest","/run-experiment","/run-batch"):self.send_error(404);return
+  if path in ("/run-experiment","/run-batch"):
    try:
     length=int(self.headers.get("Content-Length","0"))
     if length<2 or length>4096:raise ValueError("Tamanho inválido")
@@ -106,7 +158,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     if not isinstance(request,dict):raise ValueError("Formato inválido")
    except (ValueError,json.JSONDecodeError):
     self.send_error(400);return
-   code,payload=start_experiment(request)
+   code,payload=start_batch(request) if path=="/run-batch" else start_experiment(request)
   else:code,payload=start_backtest()
   body=json.dumps(payload).encode()
   self.send_response(code);self.send_header("Content-Type","application/json");self.send_header("Content-Length",str(len(body)));self.end_headers();self.wfile.write(body)
