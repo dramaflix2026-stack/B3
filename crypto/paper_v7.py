@@ -17,6 +17,7 @@ import urllib.parse
 import urllib.request
 from collections import deque
 from paper_v7_analytics import diagnostics as paper_diagnostics
+from paper_v7_journal import sync_archive, archive_status, page as archive_page, source_fingerprint
 
 DATA = pathlib.Path(os.getenv("CRYPTO_DATA_DIR", "/data/crypto"))
 PAPER = DATA / "paper-v7"
@@ -46,6 +47,8 @@ def atomic_save(state):
     tmp = STATE_FILE.with_suffix(".tmp")
     tmp.write_text(json.dumps(state, ensure_ascii=False, separators=(",", ":"), allow_nan=False))
     os.replace(tmp, STATE_FILE)
+    # Crash-safe: state is authoritative; missing ledger records are recreated on the next iteration.
+    sync_archive(state, PAPER)
 
 def _load():
     return json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else None
@@ -352,8 +355,24 @@ def snapshot():
                 "recent_events": state["events"][-12:][::-1],
             },
             "diagnostics": paper_diagnostics(state, worker, int(time.time()*1000)),
+            "paper_archive": archive_status(state, PAPER),
+            "frozen_strategy_fingerprint": source_fingerprint(state),
             "warning": "Sem ordens reais. Conta virtual experimental não aprovada para negociar. "
                        "Sem reotimização automática. Apenas candles novos e fechados.",
+        }
+
+def journal_page(page_num=1, size=20):
+    """Read-only archive query, independent from historical V4-V7 reports."""
+    with LOCK:
+        state = _load()
+        if state is None:
+            return {"status": "awaiting_feed", "total": 0, "records": []}
+        return {
+            "archive": archive_status(state, PAPER),
+            "source_fingerprint": source_fingerprint(state),
+            "activation_utc": state["created_utc"],
+            "control_decision": state["frozen"]["control_decision"],
+            "ledger": archive_page(state, PAPER, page_num=page_num, page_size=size),
         }
 
 def iteration():
@@ -370,6 +389,10 @@ def iteration():
         print('PAPER V7 ACTIVATED control=CASH source='+freeze['source_report']+' first_new_after='+state['activation_candle_utc'], flush=True)
         return
 
+    # Detect and repair missing archive records after crash between state and journal writes.
+    # A conflicting immutable record stops the feed rather than overriding it.
+    with LOCK:
+        sync_archive(state, PAPER)
     if state["phase"] != "observing":
         return
     latest_ms = int(time.time()*1000)//CANDLE_MS*CANDLE_MS-CANDLE_MS
