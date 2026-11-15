@@ -319,6 +319,7 @@ def iteration():
         state = new_state(recent, freeze)
         with LOCK:
             atomic_save(state)
+        print('PAPER V7 ACTIVATED control=CASH source='+freeze['source_report']+' first_new_after='+state['activation_candle_utc'], flush=True)
         return
 
     if state["phase"] != "observing":
@@ -351,6 +352,8 @@ def iteration():
             if state["phase"] != "observing":
                 break
         atomic_save(state)
+    if state['processed']:
+        print('PAPER V7 CANDLE UPDATE last='+utc_iso(state['last_ms'])+' processed='+str(state['processed'])+' shadow_trades='+str(len(state['trades']))+' control=CASH', flush=True)
 
 def loop():
     while True:
