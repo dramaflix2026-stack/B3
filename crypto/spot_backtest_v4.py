@@ -13,14 +13,22 @@ HOLD=720
 COOLDOWN=360
 MIN_VOL=.008
 MIN_EDGE=.006
-def test(on_progress=None):
+def test(on_progress=None, robot_ids=None, settings=None):
+ settings=settings or {}
+ stop=float(settings.get("stop_pct",STOP*100))/100
+ edge=float(settings.get("min_edge_pct",MIN_EDGE*100))/100
+ cooldown=int(settings.get("cooldown_minutes",COOLDOWN))
+ hold=int(settings.get("max_hold_minutes",HOLD))
+ selected=robot_ids or [1,2,3,4]
  files=sorted(glob.glob(str(DATA/"BTCUSDT-1m-*.csv")))
  if len(files)!=60:raise ValueError("Expected 60 monthly CSV files")
  counts=[sum(1 for _ in open(f,encoding="utf-8"))-1 for f in files]
  total=sum(counts);cutoff=int(total*.7)
  robots={}
- for k in range(4):
+ for k_id in selected:
+  k=k_id-1
   out=[]
+  progress_index=selected.index(k_id)
   for start,end in ((0,cutoff),(cutoff,total)):
    cash=START_CASH;btc=0.;entry=0.;entry_fee=0.;opened=-1;cool=0;pending=False
    closes=deque(maxlen=720);prev_ms=None;trades=0;wins=0;fees=0.;gross=0.;peak=START_CASH;maxdd=0.;gaps=0;halted=False
@@ -41,21 +49,21 @@ def test(on_progress=None):
       prev_ms=ms
       if pending and not btc and not halted:
        price=o*(1+SLIP)
-       quantity=min(cash*MAX_ALLOC/price,cash*RISK/(price*STOP),cash/(price*(1+FEE)))
+       quantity=min(cash*MAX_ALLOC/price,cash*RISK/(price*stop),cash/(price*(1+FEE)))
        if quantity*price>=5 and quantity>0:
         entry=price;btc=quantity;entry_fee=quantity*price*FEE
         cash-=quantity*price+entry_fee;fees+=entry_fee;opened=i
        pending=False
       if btc:
-       stop_price=entry*(1-STOP)
+       stop_price=entry*(1-stop)
        if l<=stop_price:exit_raw=min(o,stop_price)
-       elif i-opened>=HOLD or i==end-1 or discontinuity:exit_raw=c
+       elif i-opened>=hold or i==end-1 or discontinuity:exit_raw=c
        else:exit_raw=None
        if exit_raw is not None:
         exit_price=exit_raw*(1-SLIP);proceeds=btc*exit_price;exit_fee=proceeds*FEE
         pnl=proceeds-exit_fee-btc*entry-entry_fee
         cash+=proceeds-exit_fee;fees+=exit_fee;gross+=btc*(exit_price-entry)
-        wins+=pnl>0;trades+=1;btc=0.;cool=COOLDOWN
+        wins+=pnl>0;trades+=1;btc=0.;cool=cooldown
       equity=cash+btc*c
       peak=max(peak,equity);maxdd=max(maxdd,peak-equity)
       if equity<=START_CASH*.5:halted=True
@@ -66,7 +74,7 @@ def test(on_progress=None):
       if n>=720:sum720-=closes[0]
       closes.append(c)
       sum60+=c;sum240+=c;sum720+=c
-      if on_progress and i%50000==0:on_progress(k+1,(k*total+i)/ (4*total)*100)
+      if on_progress and i%50000==0:on_progress(k+1,(progress_index*total+i)/ (len(selected)*total)*100)
       if not btc and not cool and not halted and i<end-1 and not discontinuity:
        pending=False
        if len(closes)>=720:
@@ -74,12 +82,12 @@ def test(on_progress=None):
         fast=sum60/60;mid=sum240/240;slow=sum720/720
         volatility=(max(p[-240:])-min(p[-240:]))/c
         momentum=(c/p[-60]-1)
-        trend=fast>mid>slow and c>slow*(1+MIN_EDGE)
+        trend=fast>mid>slow and c>slow*(1+edge)
         if volatility>=MIN_VOL and trend:
-         if k==0:pending=momentum>MIN_EDGE and c>max(p[-241:-1])
-         elif k==1:pending=c>max(p[-241:-1])*(1+MIN_EDGE)
-         elif k==2:pending=MIN_EDGE<momentum<.035 and c>fast*(1+MIN_EDGE)
-         else:pending=momentum>.012 and fast/mid-1>MIN_EDGE
+         if k==0:pending=momentum>edge and c>max(p[-241:-1])
+         elif k==1:pending=c>max(p[-241:-1])*(1+edge)
+         elif k==2:pending=edge<momentum<.035 and c>fast*(1+MIN_EDGE)
+         else:pending=momentum>.012 and fast/mid-1>edge
       last_close=c
     if index>=end:break
    equity=cash+btc*(last_close or 0)
@@ -87,7 +95,7 @@ def test(on_progress=None):
    benchmark_net=benchmark_qty*(last_close or 0)*(1-FEE)-START_CASH
    out.append({"buy_hold_net_usdt":round(benchmark_net,2),"net_usdt":round(equity-START_CASH,2),"ending_equity_usdt":round(equity,2),"trades":trades,"win_rate_pct":round(100*wins/trades,2) if trades else 0,"max_realized_drawdown_usdt":round(maxdd,2),"fees_usdt":round(fees,2),"gross_usdt":round(gross,2),"gap_events":gaps,"risk_halt":halted})
   robots[str(k+1)]={"development":out[0],"validation":out[1]}
-  if on_progress:on_progress(k+1,(k+1)*25.)
+  if on_progress:on_progress(k+1,(progress_index+1)/len(selected)*100.)
   print(f"V4 BACKTEST robot {k+1}/4 complete",flush=True)
- return {"status":"complete","version":"spot-v4-experimental","candles":total,"months":len(files),"assumptions":{"capital_usdt":START_CASH,"spot_only":True,"shorts":False,"fee_rate_per_side":FEE,"slippage_fraction_per_side":SLIP,"stop_pct":STOP*100,"risk_budget_pct":RISK*100,"max_position_allocation_pct":MAX_ALLOC*100,"halt_at_equity_usdt":500,"split":"70% development / 30% previously inspected validation; NOT untouched out-of-sample","min_volatility_60m_pct":MIN_VOL*100,"min_edge_pct":MIN_EDGE*100,"cooldown_minutes":COOLDOWN,"max_hold_minutes":HOLD,"caveats":"Exploratory OHLC simulation, no orderbook/latency; stop gap slippage may exceed threshold; no real trading"},"robots":robots}
+ return {"status":"complete","version":"spot-v4-experimental","candles":total,"months":len(files),"assumptions":{"capital_usdt":START_CASH,"spot_only":True,"shorts":False,"fee_rate_per_side":FEE,"slippage_fraction_per_side":SLIP,"stop_pct":stop*100,"risk_budget_pct":RISK*100,"max_position_allocation_pct":MAX_ALLOC*100,"halt_at_equity_usdt":500,"split":"70% development / 30% previously inspected validation; NOT untouched out-of-sample","min_volatility_60m_pct":MIN_VOL*100,"min_edge_pct":edge*100,"cooldown_minutes":cooldown,"max_hold_minutes":hold,"caveats":"Exploratory OHLC simulation, no orderbook/latency; stop gap slippage may exceed threshold; no real trading"},"robots":robots,"settings":settings,"selected_robots":selected}
 if __name__=="__main__":print(json.dumps(test(),indent=2))
