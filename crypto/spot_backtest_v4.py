@@ -34,6 +34,8 @@ def test(on_progress=None, robot_ids=None, settings=None, windows=None, diagnost
    cash=START_CASH;btc=0.;entry=0.;entry_fee=0.;opened=-1;cool=0;pending=False
    closes=deque(maxlen=720);prev_ms=None;trades=0;wins=0;fees=0.;gross=0.;peak=START_CASH;maxdd=0.;gaps=0;halted=False
    index=0;last_close=None;first_open=None;sum60=0.;sum240=0.;sum720=0.
+   exits={name:{"trades":0,"wins":0,"net_usdt":0.,"fees_usdt":0.} for name in ("stop_loss","max_hold","window_end","data_gap")}
+   winning_sum=0.;losing_sum=0.;winning_count=0;losing_count=0
    regime="unknown";entry_regime="unknown";regimes={name:{"candles":0,"trades":0,"wins":0,"net_usdt":0.,"fees_usdt":0.} for name in ("uptrend","downtrend","sideways","unknown")}
    for file in files:
     with open(file,newline="",encoding="utf-8") as stream:
@@ -58,8 +60,10 @@ def test(on_progress=None, robot_ids=None, settings=None, windows=None, diagnost
        pending=False
       if btc:
        stop_price=entry*(1-stop)
-       if l<=stop_price:exit_raw=min(o,stop_price)
-       elif i-opened>=hold or i==end-1 or discontinuity:exit_raw=c
+       if l<=stop_price:exit_raw=min(o,stop_price);exit_reason="stop_loss"
+       elif discontinuity:exit_raw=c;exit_reason="data_gap"
+       elif i==end-1:exit_raw=c;exit_reason="window_end"
+       elif i-opened>=hold:exit_raw=c;exit_reason="max_hold"
        else:exit_raw=None
        if exit_raw is not None:
         exit_price=exit_raw*(1-SLIP);proceeds=btc*exit_price;exit_fee=proceeds*FEE
@@ -67,6 +71,9 @@ def test(on_progress=None, robot_ids=None, settings=None, windows=None, diagnost
         cash+=proceeds-exit_fee;fees+=exit_fee;gross+=btc*(exit_price-entry)
         wins+=pnl>0;trades+=1;btc=0.;cool=cooldown
         if diagnostics:
+         exit_bucket=exits[exit_reason];exit_bucket["trades"]+=1;exit_bucket["wins"]+=int(pnl>0);exit_bucket["net_usdt"]+=pnl;exit_bucket["fees_usdt"]+=entry_fee+exit_fee
+         if pnl>0:winning_sum+=pnl;winning_count+=1
+         else:losing_sum+=pnl;losing_count+=1
          bucket=regimes[entry_regime];bucket["trades"]+=1;bucket["wins"]+=int(pnl>0);bucket["net_usdt"]+=pnl;bucket["fees_usdt"]+=entry_fee+exit_fee
       equity=cash+btc*c
       peak=max(peak,equity);maxdd=max(maxdd,peak-equity)
@@ -102,9 +109,10 @@ def test(on_progress=None, robot_ids=None, settings=None, windows=None, diagnost
    benchmark_qty=START_CASH/(first_open*(1+FEE)) if first_open else 0
    benchmark_net=benchmark_qty*(last_close or 0)*(1-FEE)-START_CASH
    if diagnostics:
-    for bucket in regimes.values():
+    for bucket in list(regimes.values())+list(exits.values()):
      bucket["net_usdt"]=round(bucket["net_usdt"],2);bucket["fees_usdt"]=round(bucket["fees_usdt"],2)
-   out.append({"regime_diagnostics":regimes if diagnostics else None,"buy_hold_net_usdt":round(benchmark_net,2),"net_usdt":round(equity-START_CASH,2),"ending_equity_usdt":round(equity,2),"trades":trades,"win_rate_pct":round(100*wins/trades,2) if trades else 0,"max_realized_drawdown_usdt":round(maxdd,2),"fees_usdt":round(fees,2),"gross_usdt":round(gross,2),"gap_events":gaps,"risk_halt":halted})
+   trade_diagnostics=({"exit_reasons":exits,"avg_win_usdt":round(winning_sum/winning_count,2) if winning_count else None,"avg_loss_usdt":round(losing_sum/losing_count,2) if losing_count else None,"profit_factor":round(winning_sum/abs(losing_sum),3) if losing_sum<0 else None,"net_per_trade_usdt":round((winning_sum+losing_sum)/trades,3) if trades else None,"completed_trades":trades} if diagnostics else None)
+   out.append({"trade_diagnostics":trade_diagnostics,"regime_diagnostics":regimes if diagnostics else None,"buy_hold_net_usdt":round(benchmark_net,2),"net_usdt":round(equity-START_CASH,2),"ending_equity_usdt":round(equity,2),"trades":trades,"win_rate_pct":round(100*wins/trades,2) if trades else 0,"max_realized_drawdown_usdt":round(maxdd,2),"fees_usdt":round(fees,2),"gross_usdt":round(gross,2),"gap_events":gaps,"risk_halt":halted})
   robots[str(k+1)]=({"windows":[{"index":j+1,"start_candle":a,"end_candle_exclusive":b,**out[j]} for j,(a,b) in enumerate(periods)]} if windows=="five" else {"development":out[0],"validation":out[1]})
   if on_progress:on_progress(k+1,(progress_index+1)/len(selected)*100.)
   print(f"V4 BACKTEST robot {k+1}/4 complete",flush=True)
