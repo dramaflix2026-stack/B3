@@ -54,7 +54,7 @@ def run(start,end,out,symbol):
     finally:
      if tmp.exists():tmp.unlink()
    manifest.append({"month":month,"rows":count,"first_utc":first.isoformat(),"last_utc":last.isoformat(),"sha256":actual,"file":str(dest)})
-   (out/"manifest.json").write_text(json.dumps(manifest,indent=2,ensure_ascii=False),encoding="utf-8")
+   manifest_path.write_text(json.dumps(manifest,indent=2,ensure_ascii=False),encoding="utf-8")
    print(f"OK {month}: {count} candles, {len(gaps)} lacunas registradas")
   except (urllib.error.HTTPError,urllib.error.URLError,ValueError,zipfile.BadZipFile) as e:
    print(f"FALHOU {month}: {e}")
