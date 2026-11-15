@@ -97,7 +97,7 @@ def execute_batch(robot,variants):
   traceback.print_exc()
 def execute_windows(robot,settings):
  try:
-  result=test(lambda k,p:experiment_status.update(progress_pct=round(p,1),current_robot=k),robot_ids=[robot],settings=settings,windows="five")
+  result=test(lambda k,p:experiment_status.update(progress_pct=round(p,1),current_robot=k),robot_ids=[robot],settings=settings,windows="five",diagnostics=True)
   result["created_at"]=dt.datetime.now(dt.timezone.utc).isoformat()
   folder=DATA/"windows"
   folder.mkdir(parents=True,exist_ok=True)
