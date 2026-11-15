@@ -101,6 +101,55 @@ class PaperV7Tests(unittest.TestCase):
         self.assertTrue(result["feed"]["alerts"])
         self.assertEqual(result["paper"]["total_trades_recorded"], 0)
 
+    def test_mark_to_market_drawdown_in_open_position(self):
+        self.state["pending"] = {"atr": .2, "atr_pct": .2, "signal_ms": self.state["last_ms"]}
+        first = candle(self.state["last_ms"]+MINUTE, o=100, h=100.2, l=99.5, c=99.6)
+        paper.process_candle(self.state, first)
+        self.assertGreater(self.state["btc"], 0)
+        self.assertGreater(self.state["max_close_drawdown_usdt"], 0)
+        self.assertEqual(self.state["equity_peak_usdt"], 1000.)
+        up = candle(self.state["last_ms"]+MINUTE, o=99.6, h=103, l=99.6, c=102)
+        paper.process_candle(self.state, up)
+        self.assertGreater(self.state["equity_peak_usdt"], 1000)
+        down = candle(self.state["last_ms"]+MINUTE, o=102, h=102, l=100, c=100)
+        paper.process_candle(self.state, down)
+        self.assertGreater(self.state["max_close_drawdown_usdt"], 0)
+        self.assertEqual(len(self.state["trades"]), 0)
+        result = audit(self.state, {"phase": "running"}, self.state["last_ms"]+MINUTE)
+        self.assertGreater(result["paper"]["max_closed_candle_drawdown_usdt"], 0)
+        self.assertGreater(result["paper"]["max_closed_candle_drawdown_pct"], 0)
+        self.assertEqual(result["paper"]["total_trades_recorded"], 0)
+
+    def test_equity_marks_are_idempotent_and_survive_restart(self):
+        t = self.state["last_ms"]+MINUTE
+        paper.process_candle(self.state, candle(t))
+        self.assertEqual(len(self.state["daily_close_equity_utc"]), 1)
+        self.assertEqual(self.state["processed"], 1)
+        paper.atomic_save(self.state)
+        restored = paper._load()
+        snapshot = list(restored["daily_close_equity_utc"])
+        paper.process_candle(restored, candle(t))
+        self.assertEqual(restored["processed"], 1)
+        self.assertEqual(restored["daily_close_equity_utc"], snapshot)
+        paper.process_candle(restored, candle(t+MINUTE))
+        self.assertEqual(restored["processed"], 2)
+        self.assertEqual(len(restored["daily_close_equity_utc"]), 1)
+        self.assertEqual(restored["frozen"]["control_decision"], "cash")
+
+    def test_legacy_state_does_not_invent_prior_drawdown(self):
+        for k in ("equity_peak_usdt","equity_monitoring_started_ms",
+                  "max_close_drawdown_usdt","max_close_drawdown_pct",
+                  "last_close_equity_usdt","daily_close_equity_utc"):
+            self.state.pop(k)
+        self.state["cash"] = 900.
+        old_timestamp = self.state["last_ms"]
+        paper.process_candle(self.state, candle(old_timestamp+MINUTE))
+        self.assertEqual(self.state["equity_monitoring_started_ms"], old_timestamp)
+        self.assertEqual(self.state["equity_peak_usdt"], 900.)
+        self.assertEqual(self.state["max_close_drawdown_usdt"], 0.)
+        self.assertEqual(self.state["last_close_equity_usdt"], 900.)
+        self.assertEqual(len(self.state["daily_close_equity_utc"]), 1)
+
     def test_atomic_persistence_and_readonly_snapshot(self):
         paper.atomic_save(self.state)
         self.assertEqual(paper._load()["activation_ms"], self.state["activation_ms"])
