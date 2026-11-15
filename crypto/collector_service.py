@@ -95,6 +95,43 @@ def execute_batch(robot,variants):
  except Exception as e:
   experiment_status.update(state="error",error=str(e))
   traceback.print_exc()
+def execute_windows(robot,settings):
+ try:
+  result=test(lambda k,p:experiment_status.update(progress_pct=round(p,1),current_robot=k),robot_ids=[robot],settings=settings,windows="five")
+  result["created_at"]=dt.datetime.now(dt.timezone.utc).isoformat()
+  folder=DATA/"windows"
+  folder.mkdir(parents=True,exist_ok=True)
+  name=dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%f")
+  tmp=folder/(name+".tmp")
+  tmp.write_text(json.dumps(result,ensure_ascii=False,indent=2))
+  tmp.replace(folder/(name+".json"))
+  experiment_status.update(state="complete",progress_pct=100,result_id=name,error=None)
+  print("FIVE WINDOWS COMPLETE",robot,name,flush=True)
+ except Exception as e:
+  experiment_status.update(state="error",error=str(e))
+  traceback.print_exc()
+def start_windows(payload):
+ try:
+  robot=int(payload.get("robot"))
+  if robot not in (1,2,3,4):raise ValueError("Robô inválido")
+  bounds={"stop_pct":(0.5,5.),"min_edge_pct":(0.1,3.),"cooldown_minutes":(30,1440),"max_hold_minutes":(60,2880)}
+  settings={}
+  for key,(lo,hi) in bounds.items():
+   value=float(payload[key])
+   if not lo<=value<=hi:raise ValueError(key+" fora dos limites")
+   if key.endswith("minutes"):
+    if not value.is_integer():raise ValueError(key+" deve ser inteiro")
+    value=int(value)
+   settings[key]=value
+ except (ValueError,TypeError,KeyError,OverflowError) as e:return 400,{"error":"Parâmetros inválidos: "+str(e)}
+ with experiment_lock:
+  if status.get("phase")!="complete":return 409,{"error":"Histórico ainda não está pronto"}
+  if experiment_status.get("state")=="running" or status.get("backtest")=="running":return 409,{"error":"Já existe um teste em execução"}
+  if time.monotonic()-experiment_last_run[0]<60:return 429,{"error":"Aguarde um minuto entre testes"}
+  experiment_last_run[0]=time.monotonic()
+  experiment_status.update(state="running",mode="windows",progress_pct=0,current_robot=robot,error=None)
+  threading.Thread(target=execute_windows,args=(robot,settings),daemon=True).start()
+  return 202,{"status":"running","message":"Análise cronológica de cinco janelas iniciada"}
 def start_batch(payload):
  try:
   robot=int(payload.get("robot"))
@@ -149,8 +186,8 @@ def start_experiment(payload):
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_POST(self):
   path=urllib.parse.urlsplit(self.path).path
-  if path not in ("/run-backtest","/run-experiment","/run-batch"):self.send_error(404);return
-  if path in ("/run-experiment","/run-batch"):
+  if path not in ("/run-backtest","/run-experiment","/run-batch","/run-windows"):self.send_error(404);return
+  if path in ("/run-experiment","/run-batch","/run-windows"):
    try:
     length=int(self.headers.get("Content-Length","0"))
     if length<2 or length>4096:raise ValueError("Tamanho inválido")
@@ -158,13 +195,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
     if not isinstance(request,dict):raise ValueError("Formato inválido")
    except (ValueError,json.JSONDecodeError):
     self.send_error(400);return
-   code,payload=start_batch(request) if path=="/run-batch" else start_experiment(request)
+   code,payload=start_batch(request) if path=="/run-batch" else start_windows(request) if path=="/run-windows" else start_experiment(request)
   else:code,payload=start_backtest()
   body=json.dumps(payload).encode()
   self.send_response(code);self.send_header("Content-Type","application/json");self.send_header("Content-Length",str(len(body)));self.end_headers();self.wfile.write(body)
  def do_GET(self):
   path=urllib.parse.urlsplit(self.path).path
-  if path not in ("/","/health","/status","/backtest","/backtest-v2","/backtest-v3","/experiment-status","/experiments"):
+  if path not in ("/","/health","/status","/backtest","/backtest-v2","/backtest-v3","/experiment-status","/experiments","/windows"):
    self.send_error(404);return
   if path=="/":
    body=(pathlib.Path(__file__).parent/"dashboard.html").read_bytes()
@@ -173,6 +210,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
   records=json.loads(manifest.read_text()) if manifest.exists() else []
   payload={**status,"months_verified":len(records),"candles_verified":sum(x["rows"] for x in records),"gap_events":sum(len(x.get("gaps",[])) for x in records),"last_month":records[-1]["month"] if records else None,"note":"Historical research only; no live trading"}
   if path=="/experiment-status":payload=experiment_status.copy()
+  if path=="/windows":
+   folder=DATA/"windows"
+   items=sorted(folder.glob("*.json"),reverse=True)[:8] if folder.exists() else []
+   payload={"runs":[{"id":p.stem,**json.loads(p.read_text())} for p in items]}
   if path=="/experiments":
    folder=DATA/"experiments"
    items=sorted(folder.glob("*.json"),reverse=True)[:12] if folder.exists() else []
