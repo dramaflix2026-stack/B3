@@ -1,6 +1,7 @@
 """V6 fixed research candidates and chronological walk-forward selection. Spot simulation only."""
 import csv,glob,json,os,pathlib,datetime
 from collections import deque
+from math import isfinite
 
 DATA=pathlib.Path(os.getenv("CRYPTO_DATA_DIR","/data/crypto"))
 FEE=.001
@@ -13,8 +14,20 @@ HOLD=720
 COOLDOWN=360
 MIN_VOL=.008
 MIN_EDGE=.006
-def test(on_progress=None, robot_ids=None, settings=None, windows=None, diagnostics=False, trade_log=None):
+def test(on_progress=None, robot_ids=None, settings=None, windows=None, diagnostics=False, trade_log=None, atr_gate_by_window=None):
  settings=settings or {}
+ if atr_gate_by_window is not None:
+  if windows!="five" or not isinstance(atr_gate_by_window,dict):
+   raise ValueError("ATR gate requires five chronological windows")
+  for window_no,rule in atr_gate_by_window.items():
+   if window_no not in (3,4,5):
+    raise ValueError("ATR gating is permitted only in held-out windows 3-5")
+   if rule is not None:
+    if rule.get("direction") not in ("low","high"):
+     raise ValueError("ATR direction invalid")
+    value=float(rule["threshold"])
+    if not isfinite(value) or not 0<=value<=100:
+     raise ValueError("ATR percentage threshold invalid")
  stop=float(settings.get("stop_pct",STOP*100))/100
  edge=float(settings.get("min_edge_pct",MIN_EDGE*100))/100
  cooldown=int(settings.get("cooldown_minutes",COOLDOWN))
@@ -37,6 +50,7 @@ def test(on_progress=None, robot_ids=None, settings=None, windows=None, diagnost
    pending_context=None;entry_context=None;entry_time=None;entry_open=None
    closes=deque(maxlen=720);prev_ms=None;trades=0;wins=0;fees=0.;gross=0.;peak=START_CASH;maxdd=0.;gaps=0;halted=False
    index=0;last_close=None;first_open=None;sum60=0.;sum240=0.;sum720=0.
+   signals_pre_gate=0;signals_pass_gate=0;signals_rejected_gate=0
    exits={name:{"trades":0,"wins":0,"net_usdt":0.,"fees_usdt":0.} for name in ("stop_loss","take_profit","max_hold","window_end","data_gap")}
    winning_sum=0.;losing_sum=0.;winning_count=0;losing_count=0
    regime="unknown";entry_regime="unknown";regimes={name:{"candles":0,"trades":0,"wins":0,"net_usdt":0.,"fees_usdt":0.} for name in ("uptrend","downtrend","sideways","unknown")}
@@ -136,6 +150,17 @@ def test(on_progress=None, robot_ids=None, settings=None, windows=None, diagnost
          if recovery_armed and c>p[-2] and 38<rsi<55 and c<mid*.989 and volatility>=.009 and mid/c-1>.011:
           pending=True;recovery_armed=False
          if c>mid or rsi>60:recovery_armed=False
+        # Only V7 opts into these gates. Default V6 behavior is unchanged.
+        # Evaluate ATR on the completed signal candle, before next-open entry.
+        if k_id==9 and atr_gate_by_window is not None and pending:
+         signals_pre_gate+=1
+         gate=atr_gate_by_window.get(window_index+1)
+         value=round(atr/c*100,4)
+         allowed=(gate is not None and
+                  (value<gate["threshold"] if gate["direction"]=="low"
+                   else value>=gate["threshold"]))
+         if allowed:signals_pass_gate+=1
+         else:signals_rejected_gate+=1;pending=False
         if pending and trade_log is not None:
          pending_context={"signal_time_utc":ts,"signal_close_usdt":round(c,4),"regime":regime,
           "volatility_240_pct":round(volatility*100,4),"momentum_60_pct":round(momentum*100,4),
@@ -151,7 +176,7 @@ def test(on_progress=None, robot_ids=None, settings=None, windows=None, diagnost
     for bucket in list(regimes.values())+list(exits.values()):
      bucket["net_usdt"]=round(bucket["net_usdt"],2);bucket["fees_usdt"]=round(bucket["fees_usdt"],2)
    trade_diagnostics=({"exit_reasons":exits,"avg_win_usdt":round(winning_sum/winning_count,2) if winning_count else None,"avg_loss_usdt":round(losing_sum/losing_count,2) if losing_count else None,"profit_factor":round(winning_sum/abs(losing_sum),3) if losing_sum<0 else None,"net_per_trade_usdt":round((winning_sum+losing_sum)/trades,3) if trades else None,"completed_trades":trades} if diagnostics else None)
-   out.append({"trade_diagnostics":trade_diagnostics,"regime_diagnostics":regimes if diagnostics else None,"buy_hold_net_usdt":round(benchmark_net,2),"net_usdt":round(equity-START_CASH,2),"ending_equity_usdt":round(equity,2),"trades":trades,"win_rate_pct":round(100*wins/trades,2) if trades else 0,"max_realized_drawdown_usdt":round(maxdd,2),"fees_usdt":round(fees,2),"gross_usdt":round(gross,2),"gap_events":gaps,"risk_halt":halted})
+   out.append({"atr_gate_signal_counts":({"before":signals_pre_gate,"passed":signals_pass_gate,"rejected":signals_rejected_gate} if atr_gate_by_window is not None and k_id==9 else None),"trade_diagnostics":trade_diagnostics,"regime_diagnostics":regimes if diagnostics else None,"buy_hold_net_usdt":round(benchmark_net,2),"net_usdt":round(equity-START_CASH,2),"ending_equity_usdt":round(equity,2),"trades":trades,"win_rate_pct":round(100*wins/trades,2) if trades else 0,"max_realized_drawdown_usdt":round(maxdd,2),"fees_usdt":round(fees,2),"gross_usdt":round(gross,2),"gap_events":gaps,"risk_halt":halted})
   robots[str(k_id)]=({"windows":[{"index":j+1,"start_candle":a,"end_candle_exclusive":b,**out[j]} for j,(a,b) in enumerate(periods)]} if windows=="five" else {"development":out[0],"validation":out[1]})
   if on_progress:on_progress(k_id,(progress_index+1)/len(selected)*100.)
   print(f"V6 BACKTEST robot {k_id}/10 complete",flush=True)
