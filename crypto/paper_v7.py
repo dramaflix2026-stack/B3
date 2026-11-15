@@ -307,7 +307,7 @@ def snapshot():
                 "recent_trades": state["trades"][-12:][::-1],
                 "recent_events": state["events"][-12:][::-1],
             },
-"            "diagnostics": paper_diagnostics(state, worker, int(time.time()*1000)),
+            "diagnostics": paper_diagnostics(state, worker, int(time.time()*1000)),
             "warning": "Sem ordens reais. Conta virtual experimental não aprovada para negociar. "
                        "Sem reotimização automática. Apenas candles novos e fechados.",
         }
