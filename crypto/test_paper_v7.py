@@ -501,14 +501,17 @@ class PaperV7Tests(unittest.TestCase):
                     self.buttons.append(attrs)
         page=Page();page.feed(main)
         self.assertEqual(len(page.ids),len(set(page.ids)))
-        self.assertEqual(len(page.buttons),2,"One test button per implemented version")
-        self.assertEqual([btn.get("id") for btn in page.buttons],["testV7","testV8"])
+        self.assertEqual(len(page.buttons),3,"One test button per implemented version")
+        self.assertEqual([btn.get("id") for btn in page.buttons],["testV7","testV8","testV9"])
         self.assertIn("▶ Testar V7",main)
         self.assertIn('id="testResult" hidden',main)
         self.assertIn("fetch('/paper-v7'",main)
         self.assertIn("fetch('/paper-v7-audit'",main)
         self.assertIn("V8",main)
         self.assertIn("Testar V8",main)
+        self.assertIn("Testar V9",main)
+        self.assertIn("fetch(\'/test-v9\'",main)
+        self.assertIn(\'id="v9Result" hidden\',main)
         self.assertIn("fetch('/test-v8'",main)
         self.assertIn('id="v8Result" hidden',main)
         self.assertIn("Nenhuma mudança na V7",main)
@@ -535,6 +538,7 @@ class PaperV7Tests(unittest.TestCase):
                 html=response.read().decode()
                 self.assertIn('id="testV7"',html)
                 self.assertIn('id="testV8"',html)
+                self.assertIn('id="testV9"',html)
                 self.assertNotIn('id="runbtn"',html)
             with urllib.request.urlopen(base+"/laboratorio",timeout=4) as response:
                 self.assertEqual(response.status,200)
@@ -596,6 +600,84 @@ class PaperV7Tests(unittest.TestCase):
             self.assertEqual(paper._load()["frozen"]["control_decision"],"cash")
         finally:
             server.shutdown();server.server_close();thread.join(3)
+
+    def _make_v9_fixture(self, bad_gap=False):
+        import csv
+        import json
+        root=pathlib.Path(self.tmp.name)/"history"
+        root.mkdir(parents=True,exist_ok=True)
+        name="BTCUSDT-1m-2026-10.csv"
+        start=self.state["last_ms"]-720*MINUTE
+        n=920
+        with (root/name).open("w",encoding="utf-8",newline="") as stream:
+            writer=csv.writer(stream)
+            writer.writerow(["timestamp","open","high","low","close","volume"])
+            for i in range(n):
+                ms=start+i*MINUTE+(MINUTE if bad_gap and i>=750 else 0)
+                from paper_v7 import utc_iso
+                writer.writerow([utc_iso(ms),"100","100.20","99.80","100","1.0"])
+        (root/"BTCUSDT-manifest.json").write_text(
+            json.dumps([{"month":"2026-10","rows":n,"file":str(root/name)}]),
+            encoding="utf-8"
+        )
+        return root
+
+    def test_v9_real_csv_replay_does_not_force_signals_or_write_v7_state(self):
+        from v9_historical_replay import run
+        root=self._make_v9_fixture()
+        paper.atomic_save(self.state)
+        original=paper.STATE_FILE.read_bytes()
+        result=run(data_dir=root)
+        self.assertEqual(result["version"],"V9")
+        self.assertEqual(result["status"],"passed",result)
+        self.assertEqual(result["replayed_candles"],199)
+        self.assertEqual(result["historical_candles_in_month"],920)
+        self.assertEqual(result["source_month"],"2026-10")
+        self.assertEqual(result["signals"],0)
+        self.assertEqual(result["trades_closed"],0)
+        self.assertEqual(result["checks_passed"],result["checks_total"])
+        self.assertIs(result["signals_forced"],False)
+        self.assertIs(result["writes_v7_state"],False)
+        self.assertIs(result["executes_exchange_orders"],False)
+        self.assertIs(result["sample_is_new_prospective"],False)
+        self.assertEqual(paper.STATE_FILE.read_bytes(),original)
+
+    def test_v9_real_csv_gap_rejects_without_v7_state_mutation(self):
+        from v9_historical_replay import run
+        root=self._make_v9_fixture(bad_gap=True)
+        paper.atomic_save(self.state)
+        original=paper.STATE_FILE.read_bytes()
+        with self.assertRaisesRegex(ValueError,"Lacuna"):
+            run(data_dir=root)
+        self.assertEqual(paper.STATE_FILE.read_bytes(),original)
+
+    def test_v9_http_endpoint_replays_real_csv_fixture_isolated(self):
+        import http.server
+        import json
+        import threading
+        import urllib.request
+        import collector_service
+        root=self._make_v9_fixture()
+        paper.atomic_save(self.state)
+        saved=paper.STATE_FILE.read_bytes()
+        original_data=paper.DATA
+        paper.DATA=root
+        server=http.server.ThreadingHTTPServer(("127.0.0.1",0),collector_service.Handler)
+        thread=threading.Thread(target=server.serve_forever,daemon=True)
+        thread.start()
+        try:
+            url="http://127.0.0.1:"+str(server.server_address[1])+"/test-v9"
+            req=urllib.request.Request(url,data=b"",method="POST")
+            with urllib.request.urlopen(req,timeout=10) as response:
+                self.assertEqual(response.status,200)
+                result=json.load(response)
+            self.assertEqual(result["version"],"V9")
+            self.assertEqual(result["status"],"passed",result)
+            self.assertEqual(result["checks_passed"],result["checks_total"])
+            self.assertEqual(paper.STATE_FILE.read_bytes(),saved)
+        finally:
+            server.shutdown();server.server_close();thread.join(3)
+            paper.DATA=original_data
 
     def test_atomic_persistence_and_readonly_snapshot(self):
         paper.atomic_save(self.state)
