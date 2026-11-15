@@ -378,6 +378,50 @@ class PaperV7Tests(unittest.TestCase):
         self.assertEqual(state["cash"],1000)
         self.assertEqual(state["frozen"]["control_decision"],"cash")
 
+    def test_readonly_http_endpoints_with_real_handler(self):
+        import http.server
+        import json
+        import threading
+        import urllib.error
+        import urllib.request
+        import collector_service
+        data_dir=self._auditable_source()
+        original_data=paper.DATA
+        paper.DATA=data_dir
+        try:
+            paper.atomic_save(self.state)
+            srv=http.server.ThreadingHTTPServer(("127.0.0.1",0),collector_service.Handler)
+            thread=threading.Thread(target=srv.serve_forever,daemon=True)
+            thread.start()
+            try:
+                base="http://127.0.0.1:"+str(srv.server_address[1])
+                for route in ("/health","/paper-v7","/paper-v7-journal?page=1&size=20","/paper-v7-audit"):
+                    with urllib.request.urlopen(base+route,timeout=4) as response:
+                        self.assertEqual(response.status,200,route)
+                        obj=json.load(response)
+                        self.assertIsInstance(obj,dict,route)
+                        if route.endswith("paper-v7-audit"):
+                            self.assertEqual(obj["status"],"passed",obj)
+                            self.assertEqual(obj["trades_expected"],0)
+                        if route.startswith("/paper-v7-journal"):
+                            self.assertEqual(obj["ledger"]["total"],0)
+                            self.assertEqual(obj["control_decision"],"cash")
+                        if route=="/paper-v7":
+                            self.assertEqual(obj["control"]["decision"],"cash")
+                            self.assertEqual(obj["shadow"]["mode"],"exploratory_paper_only")
+                with self.assertRaises(urllib.error.HTTPError) as err:
+                    urllib.request.urlopen(base+"/paper-v7-journal?page=0",timeout=4)
+                self.assertEqual(err.exception.code,400)
+                with self.assertRaises(urllib.error.HTTPError) as err:
+                    urllib.request.urlopen(urllib.request.Request(base+"/run-real-order",method="POST"),timeout=4)
+                self.assertEqual(err.exception.code,404)
+            finally:
+                srv.shutdown()
+                srv.server_close()
+                thread.join(3)
+        finally:
+            paper.DATA=original_data
+
     def test_atomic_persistence_and_readonly_snapshot(self):
         paper.atomic_save(self.state)
         self.assertEqual(paper._load()["activation_ms"], self.state["activation_ms"])
