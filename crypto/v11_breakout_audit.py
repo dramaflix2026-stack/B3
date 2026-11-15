@@ -27,7 +27,7 @@ def _signal(closes, ranges, close, buffer):
     basic=(fast>mid>slow and vol>=.009 and close>slow*1.006 and close/fast-1<.016)
     return basic and close>previous_high*(1+buffer),atr,close/previous_high-1
 
-def _simulate(candles,freeze,buffer):
+def _simulate(candles,freeze,buffer,collect_trades=False):
     """Local, independently accounted spot paper ledger; no state writes."""
     closes=deque((c["c"] for c in candles[:WARMUP][-720:]),maxlen=720)
     ranges=deque(maxlen=14)
@@ -39,6 +39,8 @@ def _simulate(candles,freeze,buffer):
     signals=0;atr_rejected=0;trades=0;wins=0;realized=0.0;fees=0.0;slip_cost=0.0
     peak=cash;max_dd=0.0;gross_profit=0.0;gross_loss=0.0
     rule=freeze["shadow_atr"]
+    trade_details=[]
+    entry_high=entry_low=None
     for candle in candles[WARMUP:]:
         ms,o,h,l,c=(candle[k] for k in ("ms","o","h","l","c"))
         if pending and not qty and not cool:
@@ -48,14 +50,19 @@ def _simulate(candles,freeze,buffer):
             if amount*fill>=5:
                 fee=amount*fill*paper.FEE
                 cash-=amount*fill+fee;qty=amount
-                entry={"fill":fill,"fee":fee,"stop":stop,"ms":ms}
+                entry={"fill":fill,"fee":fee,"stop":stop,"ms":ms,"entry_raw":o}
+                entry_high=o;entry_low=o
                 fees+=fee;slip_cost+=amount*(fill-o)
         pending=None
         if qty:
+            entry_high=max(entry_high,h)
+            entry_low=min(entry_low,l)
             stop_price=entry["fill"]*(1-entry["stop"])
             if l<=stop_price:
+                reason="stop"
                 raw=min(o,stop_price)
             elif ms-entry["ms"]>=paper.HOLD_MINUTES*paper.CANDLE_MS:
+                reason="time"
                 raw=c
             else:
                 raw=None
@@ -64,6 +71,15 @@ def _simulate(candles,freeze,buffer):
                 fee=qty*fill*paper.FEE
                 net=qty*(fill-entry["fill"])-entry["fee"]-fee
                 cash+=qty*fill-fee;fees+=fee;slip_cost+=qty*(raw-fill)
+                if collect_trades:
+                    trade_details.append({"reason":reason,"entry_ms":entry["ms"],"exit_ms":ms,
+                      "holding_minutes":round((ms-entry["ms"])/paper.CANDLE_MS,2),
+                      "entry_price":round(entry["fill"],6),"exit_price":round(fill,6),
+                      "quantity":qty,"gross_usdt":qty*(fill-entry["fill"]),
+                      "entry_fee_usdt":entry["fee"],"exit_fee_usdt":fee,
+                      "slippage_usdt":qty*(entry["fill"]-entry["entry_raw"])+qty*(raw-fill),
+                      "net_usdt":net,"mfe_pct":(entry_high/entry["fill"]-1)*100,
+                      "mae_pct":(entry_low/entry["fill"]-1)*100})
                 realized+=net;trades+=1;wins+=net>0
                 gross_profit+=max(net,0);gross_loss+=max(-net,0)
                 qty=0;entry=None;cool=paper.COOLDOWN_MINUTES
@@ -80,7 +96,7 @@ def _simulate(candles,freeze,buffer):
         equity=cash+qty*c;peak=max(peak,equity)
         max_dd=max(max_dd,(peak-equity)/peak*100)
     equity=cash+qty*candles[-1]["c"]
-    return {"buffer_pct":round(buffer*100,2),"signals":signals,
+    result={"buffer_pct":round(buffer*100,2),"signals":signals,
             "atr_rejected":atr_rejected,"trades_closed":trades,"open_position":bool(qty),
             "wins":wins,"win_rate_pct":round(wins/trades*100,2) if trades else None,
             "realized_net_usdt":round(realized,4),
@@ -88,6 +104,8 @@ def _simulate(candles,freeze,buffer):
             "fees_usdt":round(fees,4),"slippage_usdt":round(slip_cost,4),
             "max_close_drawdown_pct":round(max_dd,4),
             "profit_factor":round(gross_profit/gross_loss,3) if gross_loss else None}
+    if collect_trades:result["trade_details"]=trade_details
+    return result
 
 def run(data_dir=None):
     root=pathlib.Path(data_dir if data_dir is not None else paper.DATA)
