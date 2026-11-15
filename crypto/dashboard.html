@@ -131,6 +131,22 @@ a:hover{text-decoration:underline}
   <div class="verdict" id="v10Verdict">—</div>
   <div class="meta" id="v10Meta">Contagens de primeira barreira são exclusivas por candle; falhas em qualquer etapa podem se sobrepor.</div>
  </section>
+ <section class="card v8-card" aria-label="Teste disponível V11">
+  <div class="version-top"><span class="version">V11</span><span class="tag">● Disponível</span></div>
+  <p><strong>Auditoria de rompimento:</strong> compara distâncias de 0%, 0,10%, 0,20%, 0,40% e 0,60% sobre preços históricos, com taxas, stop e slippage. Não muda a V7.</p>
+  <button class="primary" id="testV11" type="button">▶ Testar V11</button>
+  <div class="hint">Pesquisa retrospectiva · Sem ordens reais · Nenhum parâmetro aplicado à V7.</div>
+ </section>
+ <section class="result" id="v11Result" hidden aria-live="polite">
+  <div class="result-head"><div><h2>Resultado do teste V11</h2><p id="v11Time">Sensibilidade de rompimento</p></div><span id="v11Status" class="result-pill">Verificando</span></div>
+  <div class="metrics">
+   <div class="metric"><span class="key">Candles históricos</span><strong id="v11Candles">—</strong><small id="v11Source">BTC/USDT M1</small></div>
+   <div class="metric"><span class="key">Conciliação com V7</span><strong id="v11Checks">—</strong><small>Regra de referência 0,60%</small></div>
+  </div>
+  <div id="v11Rows" class="v8-scenarios"></div>
+  <div class="verdict" id="v11Verdict">—</div>
+  <div class="meta" id="v11Meta">Comparações são retrospectivas; não escolher uma variante pelo maior lucro nesta mesma amostra.</div>
+ </section>
 </main>
 <footer><span>BTC Scalper AI · Somente paper trading</span><a href="/laboratorio">Histórico técnico</a></footer>
 </div>
@@ -286,7 +302,32 @@ async function testV10(){
  }finally{button.disabled=false;button.textContent='↻ Testar V10 novamente'}
 }
 byId('testV9').addEventListener('click',testV9);
+
+async function testV11(){
+ const button=byId('testV11');button.disabled=true;button.textContent='Auditando rompimentos…';
+ byId('v11Result').hidden=false;set('v11Status','Executando');
+ byId('v11Status').className='result-pill';set('v11Time','Analisando candles e custos simulados…');
+ try{
+  const response=await fetch('/test-v11',{method:'POST',cache:'no-store'});
+  const data=await response.json();
+  if(!response.ok||data.version!=='V11')throw Error(data.error||'Auditoria não concluída');
+  const ok=data.status==='passed'&&data.checks_passed===data.checks_total&&data.no_parameter_change_to_v7===true&&data.writes_v7_state===false&&data.executes_exchange_orders===false;
+  set('v11Time','Teste em '+new Date().toLocaleString('pt-BR',{dateStyle:'short',timeStyle:'short'})+' · Histórico conhecido');
+  set('v11Status',ok?'Auditoria OK':'REVISAR');byId('v11Status').className='result-pill'+(ok?'':' fail');
+  set('v11Candles',integer(data.candles_analyzed));set('v11Source','Binance Vision · '+data.source_month);
+  set('v11Checks',data.checks_passed+' / '+data.checks_total);
+  byId('v11Rows').innerHTML=(data.variants||[]).map(x=>'<div class="scenario"><div class="scenario-head"><strong>Rompimento +'+escapeText(String(x.buffer_pct).replace(".",","))+'%</strong><span>'+integer(x.signals)+' sinais</span></div><small>'+integer(x.trades_closed)+' trades fechados · '+integer(x.atr_rejected)+' barrados ATR · Resultado virtual: <b>'+money(x.marked_net_usdt)+'</b> · Taxas: '+money(x.fees_usdt)+' · Drawdown: '+escapeText(String(x.max_close_drawdown_pct))+'%</small></div>').join('');
+  set('v11Verdict',ok?'Auditoria de sensibilidade concluída. As alternativas são experimentos retrospectivos, NÃO novas regras aprovadas. A referência 0,60% foi conciliada com a V7 congelada.':'Falha na conciliação com a V7; não aprovar as alternativas.');
+  set('v11Meta','Rompimento compara o fechamento com os 240 FECHAMENTOS anteriores, não com máximas de candles. Histórico já inspecionado · Sem dinheiro real · V7–V10 intactas.');
+  set('status',ok?'● V11 · AUDITORIA OK':'● V11 · REVISAR');
+ }catch(error){
+  set('v11Time','Falha na auditoria');set('v11Status','ERRO');byId('v11Status').className='result-pill fail';
+  set('v11Candles','—');set('v11Checks','—');byId('v11Rows').textContent='';
+  set('v11Verdict','V11 não concluída: '+error.message+'.');set('status','● V11 · INDISPONÍVEL');
+ }finally{button.disabled=false;button.textContent='↻ Testar V11 novamente'}
+}
 byId('testV10').addEventListener('click',testV10);
+byId('testV11').addEventListener('click',testV11);
 </script>
 </body>
 </html>
