@@ -18,6 +18,7 @@ import urllib.request
 from collections import deque
 from paper_v7_analytics import diagnostics as paper_diagnostics
 from paper_v7_journal import sync_archive, archive_status, page as archive_page, source_fingerprint
+from paper_v7_daily import record_candle as record_daily_candle, status as daily_status, alerts as daily_alerts
 
 DATA = pathlib.Path(os.getenv("CRYPTO_DATA_DIR", "/data/crypto"))
 PAPER = DATA / "paper-v7"
@@ -225,6 +226,15 @@ def process_candle(state, candle):
         _event(state, "data_gap", ms, state["error"])
         return
 
+    # Daily activity is counted only after installation, never retrospectively.
+    fee_before = float(state["fees"])
+    slip_before = float(state["slippage"])
+    pnl_before = float(state["realized"])
+    signals_before = int(state["signals"])
+    blocked_before = int(state["blocked"])
+    trades_before = int(state.get("total_trades", len(state["trades"])))
+    virtual_entry = 0
+
     # Pending order from prior CLOSE: simulate fill at THIS candle OPEN.
     pending = state["pending"]
     state["pending"] = None
@@ -245,6 +255,7 @@ def process_candle(state, candle):
                               "atr_signal_pct": pending["atr_pct"]}
             state["fees"] += commission
             state["slippage"] += qty * (fill - o)
+            virtual_entry = 1
             _event(state, "paper_buy", ms, "Somente simulação; sem ordem real")
 
     if state["btc"] > 0:
@@ -313,6 +324,16 @@ def process_candle(state, candle):
     record_close_equity(state, ms, c)
     state["last_ms"] = ms
     state["last_price"] = c
+    record_daily_candle(
+        state, ms,
+        signals=int(state["signals"]) - signals_before,
+        blocked=int(state["blocked"]) - blocked_before,
+        entries=virtual_entry,
+        exits=int(state.get("total_trades", len(state["trades"]))) - trades_before,
+        fee_delta=float(state["fees"]) - fee_before,
+        slippage_delta=float(state["slippage"]) - slip_before,
+        realized_delta=float(state["realized"]) - pnl_before,
+    )
     state["processed"] += 1
     state["feed_last_success_utc"] = now_iso()
 
@@ -324,6 +345,8 @@ def snapshot():
                     "message": "Acompanhamento ainda não inicializado; nenhuma operação executada."}
         account_value = state["cash"] + state["btc"] * state["last_price"]
         frozen = state["frozen"]
+        now_ms = int(time.time()*1000)
+        archived = archive_status(state, PAPER)
         return {
             "status": state["phase"],
             "worker": dict(worker),
@@ -355,7 +378,9 @@ def snapshot():
                 "recent_events": state["events"][-12:][::-1],
             },
             "diagnostics": paper_diagnostics(state, worker, int(time.time()*1000)),
-            "paper_archive": archive_status(state, PAPER),
+            "paper_archive": archived,
+            "daily_report": daily_status(state, now_ms),
+            "operational_alerts": daily_alerts(state, worker, now_ms, archived),
             "frozen_strategy_fingerprint": source_fingerprint(state),
             "warning": "Sem ordens reais. Conta virtual experimental não aprovada para negociar. "
                        "Sem reotimização automática. Apenas candles novos e fechados.",
