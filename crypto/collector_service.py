@@ -2,7 +2,7 @@
 """Coleta em segundo plano e expõe progresso; sem endpoints de negociação."""
 import datetime as dt,glob,http.server,json,os,pathlib,threading,traceback,urllib.parse
 from download_history import run
-from spot_backtest_v2 import test
+from spot_backtest_v3 import test
 DATA=pathlib.Path(os.environ.get("CRYPTO_DATA_DIR","/data/crypto"))
 START=os.environ.get("CRYPTO_START","2021-11")
 END=os.environ.get("CRYPTO_END","2026-10")
@@ -23,19 +23,19 @@ def collect():
    status["backtest"]="running"
    result=test(lambda k: status.update(backtest_robot_completed=k))
    report=DATA/"backtest-results.json"
-   old=DATA/"backtest-v1-results.json"
-   if report.exists() and not old.exists(): old.write_bytes(report.read_bytes())
+   previous=DATA/"backtest-v2-results.json"
+   if report.exists() and not previous.exists(): previous.write_bytes(report.read_bytes())
    tmp=DATA/"backtest-results.tmp"
    tmp.write_text(json.dumps(result,indent=2,ensure_ascii=False))
    tmp.replace(report)
    status["backtest"]="complete"
-   print("BACKTEST COMPLETE: 4 robots, 60 months",flush=True)
+   print("V3 BACKTEST COMPLETE: 4 robots, 60 months",flush=True)
  except Exception as e:
   status.update(phase="error",error=str(e));traceback.print_exc()
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   path=urllib.parse.urlsplit(self.path).path
-  if path not in ("/","/health","/status","/backtest"):
+  if path not in ("/","/health","/status","/backtest","/backtest-v2"):
    self.send_error(404);return
   if path=="/":
    body=(pathlib.Path(__file__).parent/"dashboard.html").read_bytes()
@@ -43,8 +43,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
   manifest=DATA/"BTCUSDT-manifest.json"
   records=json.loads(manifest.read_text()) if manifest.exists() else []
   payload={**status,"months_verified":len(records),"candles_verified":sum(x["rows"] for x in records),"gap_events":sum(len(x.get("gaps",[])) for x in records),"last_month":records[-1]["month"] if records else None,"note":"Historical research only; no live trading"}
-  if path=="/backtest":
-   report=DATA/"backtest-results.json"
+  if path in ("/backtest","/backtest-v2"):
+   report=DATA/("backtest-v2-results.json" if path=="/backtest-v2" else "backtest-results.json")
    payload=json.loads(report.read_text()) if report.exists() else {"status":status.get("backtest","pending"),"phase":status.get("phase"),"error":status.get("error")}
   body=json.dumps(payload).encode()
   self.send_response(200);self.send_header("Content-Type","application/json");self.send_header("Content-Length",str(len(body)));self.end_headers();self.wfile.write(body)
