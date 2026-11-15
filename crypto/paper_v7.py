@@ -20,6 +20,7 @@ from paper_v7_analytics import diagnostics as paper_diagnostics
 from paper_v7_journal import sync_archive, archive_status, page as archive_page, source_fingerprint
 from paper_v7_daily import record_candle as record_daily_candle, status as daily_status, alerts as daily_alerts
 from paper_v7_audit import audit as audit_v7_account
+from paper_v7_guard import check as check_paper_audit_guard
 
 DATA = pathlib.Path(os.getenv("CRYPTO_DATA_DIR", "/data/crypto"))
 PAPER = DATA / "paper-v7"
@@ -380,6 +381,7 @@ def snapshot():
             },
             "diagnostics": paper_diagnostics(state, worker, int(time.time()*1000)),
             "paper_archive": archived,
+            "automatic_accounting_audit": state.get("audit_guard"),
             "daily_report": daily_status(state, now_ms),
             "operational_alerts": daily_alerts(state, worker, now_ms, archived),
             "frozen_strategy_fingerprint": source_fingerprint(state),
@@ -422,7 +424,10 @@ def iteration():
             raise ValueError("Fonte pública sem 721 candles fechados consecutivos")
         state = new_state(recent, freeze)
         with LOCK:
+            guard = check_paper_audit_guard(state, PAPER, DATA)
             atomic_save(state)
+        if guard:
+            print("PAPER V7 AUDIT", guard["status"], guard["checks_passed"],"/",guard["checks_total"],"control=CASH",flush=True)
         print('PAPER V7 ACTIVATED control=CASH source='+freeze['source_report']+' first_new_after='+state['activation_candle_utc'], flush=True)
         return
 
@@ -430,6 +435,11 @@ def iteration():
     # A conflicting immutable record stops the feed rather than overriding it.
     with LOCK:
         sync_archive(state, PAPER)
+        guard = check_paper_audit_guard(state, PAPER, DATA)
+        if guard:
+            atomic_save(state)
+            print("PAPER V7 AUDIT", guard["status"],guard["checks_passed"],"/",guard["checks_total"],
+                  "failures="+",".join(guard["failures"]),"control=CASH",flush=True)
     if state["phase"] != "observing":
         return
     latest_ms = int(time.time()*1000)//CANDLE_MS*CANDLE_MS-CANDLE_MS
@@ -460,6 +470,11 @@ def iteration():
             if state["phase"] != "observing":
                 break
         atomic_save(state)
+        guard = check_paper_audit_guard(state, PAPER, DATA)
+        if guard:
+            atomic_save(state)
+            print("PAPER V7 AUDIT",guard["status"],guard["checks_passed"],"/",guard["checks_total"],
+                  "failures="+",".join(guard["failures"]),"control=CASH",flush=True)
     if state['processed']:
         print('PAPER V7 CANDLE UPDATE last='+utc_iso(state['last_ms'])+' processed='+str(state['processed'])+' shadow_trades='+str(len(state['trades']))+' control=CASH', flush=True)
 
