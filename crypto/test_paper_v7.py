@@ -501,8 +501,8 @@ class PaperV7Tests(unittest.TestCase):
                     self.buttons.append(attrs)
         page=Page();page.feed(main)
         self.assertEqual(len(page.ids),len(set(page.ids)))
-        self.assertEqual(len(page.buttons),3,"One test button per implemented version")
-        self.assertEqual([btn.get("id") for btn in page.buttons],["testV7","testV8","testV9"])
+        self.assertEqual(len(page.buttons),4,"One test button per implemented version")
+        self.assertEqual([btn.get("id") for btn in page.buttons],["testV7","testV8","testV9","testV10"])
         self.assertIn("▶ Testar V7",main)
         self.assertIn('id="testResult" hidden',main)
         self.assertIn("fetch('/paper-v7'",main)
@@ -510,6 +510,8 @@ class PaperV7Tests(unittest.TestCase):
         self.assertIn("V8",main)
         self.assertIn("Testar V8",main)
         self.assertIn("Testar V9",main)
+        self.assertIn("Testar V10",main)
+        self.assertIn("fetch(\'/test-v10\'",main)
         self.assertIn("fetch(\'/test-v9\'",main)
         self.assertIn('id="v9Result" hidden',main)
         self.assertIn("fetch('/test-v8'",main)
@@ -539,6 +541,7 @@ class PaperV7Tests(unittest.TestCase):
                 self.assertIn('id="testV7"',html)
                 self.assertIn('id="testV8"',html)
                 self.assertIn('id="testV9"',html)
+                self.assertIn('id="testV10"',html)
                 self.assertNotIn('id="runbtn"',html)
             with urllib.request.urlopen(base+"/laboratorio",timeout=4) as response:
                 self.assertEqual(response.status,200)
@@ -674,6 +677,61 @@ class PaperV7Tests(unittest.TestCase):
             self.assertEqual(result["version"],"V9")
             self.assertEqual(result["status"],"passed",result)
             self.assertEqual(result["checks_passed"],result["checks_total"])
+            self.assertEqual(paper.STATE_FILE.read_bytes(),saved)
+        finally:
+            server.shutdown();server.server_close();thread.join(3)
+            paper.DATA=original_data
+
+    def test_v10_signal_funnel_on_verified_real_csv_without_state_write(self):
+        from v10_signal_diagnostics import run
+        root=self._make_v9_fixture()
+        paper.atomic_save(self.state)
+        saved=paper.STATE_FILE.read_bytes()
+        result=run(data_dir=root)
+        self.assertEqual(result["version"],"V10")
+        self.assertEqual(result["status"],"passed",result)
+        self.assertEqual(result["candles_analyzed"],199)
+        self.assertEqual(result["natural_signals"],0)
+        self.assertEqual(result["trades_closed"],0)
+        self.assertEqual(result["checks_passed"],result["checks_total"])
+        self.assertTrue(result["reconciles_to_frozen_engine"])
+        self.assertEqual(sum(x["first_blocked"] for x in result["funnel"]),199)
+        self.assertEqual(result["funnel"][0]["first_blocked"],199)
+        self.assertIs(result["writes_v7_state"],False)
+        self.assertIs(result["signals_forced"],False)
+        self.assertEqual(paper.STATE_FILE.read_bytes(),saved)
+
+    def test_v10_gap_fails_closed_without_state_write(self):
+        from v10_signal_diagnostics import run
+        root=self._make_v9_fixture(bad_gap=True)
+        paper.atomic_save(self.state)
+        saved=paper.STATE_FILE.read_bytes()
+        with self.assertRaisesRegex(ValueError,"Lacuna"):
+            run(data_dir=root)
+        self.assertEqual(paper.STATE_FILE.read_bytes(),saved)
+
+    def test_v10_http_endpoint_isolated(self):
+        import http.server
+        import json
+        import threading
+        import urllib.request
+        import collector_service
+        root=self._make_v9_fixture()
+        paper.atomic_save(self.state)
+        saved=paper.STATE_FILE.read_bytes()
+        original_data=paper.DATA
+        paper.DATA=root
+        server=http.server.ThreadingHTTPServer(("127.0.0.1",0),collector_service.Handler)
+        thread=threading.Thread(target=server.serve_forever,daemon=True)
+        thread.start()
+        try:
+            url="http://127.0.0.1:"+str(server.server_address[1])+"/test-v10"
+            req=urllib.request.Request(url,data=b"",method="POST")
+            with urllib.request.urlopen(req,timeout=10) as response:
+                self.assertEqual(response.status,200)
+                result=json.load(response)
+            self.assertEqual(result["version"],"V10")
+            self.assertEqual(result["status"],"passed",result)
             self.assertEqual(paper.STATE_FILE.read_bytes(),saved)
         finally:
             server.shutdown();server.server_close();thread.join(3)
