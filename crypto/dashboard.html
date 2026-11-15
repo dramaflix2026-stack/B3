@@ -51,7 +51,7 @@ a{color:#9ad8c1;text-decoration:none}
 a:hover{text-decoration:underline}
 @media(max-width:480px){.shell{padding:17px 14px 38px}header{margin-bottom:40px}.card{padding:21px 18px}.result{padding:17px}.result-head{flex-wrap:wrap}.metric strong{font-size:19px}.lead{font-size:14px}.next{padding:15px}}
 @media(prefers-reduced-motion:reduce){.primary{transition:none}}
-</style>
+.v8-card{margin-top:20px}.v8-card strong{color:#e1f4f3}.v8-scenarios{display:grid;gap:10px;margin-top:13px}.scenario{padding:15px;border:1px solid #304958;background:#0d1928;border-radius:13px}.scenario-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.scenario-head strong{font-size:15px}.scenario-head span{font-size:12px;color:#7de5ae}.scenario small{display:block;color:#a4b5c6;font-size:12px;line-height:1.6;margin-top:7px}.scenario b{color:#d2e7e7}.scenario .failed{color:#ffb4ba}.v8-card{border-color:#31615e}</style>
 </head>
 <body>
 <div class="shell">
@@ -80,7 +80,22 @@ a:hover{text-decoration:underline}
   <div class="verdict" id="testVerdict">—</div>
   <div class="meta" id="testMeta">Apenas teste de leitura da simulação, sem ligação com sua conta na Binance.</div>
  </section>
- <div class="next"><div><strong>V8</strong><small>Próxima versão: ainda não desenvolvida.</small></div><span class="next-badge">Indisponível</span></div>
+ <section class="card v8-card" aria-label="Teste disponível V8">
+  <div class="version-top"><span class="version">V8</span><span class="tag">● Disponível</span></div>
+  <p>Teste controlado de entrada, stop, saída e custos. Usa <strong>preços fictícios</strong> e aciona o mesmo mecanismo de simulação em memória, sem alterar a V7.</p>
+  <button class="primary" id="testV8" type="button">▶ Testar V8</button>
+  <div class="hint">Força operações somente no cenário isolado; não opera na Binance.</div>
+ </section>
+ <section class="result" id="v8Result" hidden aria-live="polite">
+  <div class="result-head"><div><h2>Resultado do teste V8</h2><p id="v8Time">Cenários artificiais · sem ordens</p></div><span id="v8Status" class="result-pill">Verificando</span></div>
+  <div class="metrics">
+   <div class="metric"><span class="key">Verificações</span><strong id="v8Checks">—</strong><small>Motor de execução virtual</small></div>
+   <div class="metric"><span class="key">Cenários</span><strong id="v8Scenarios">—</strong><small>Entrada, stop, saída e lacuna</small></div>
+  </div>
+  <div id="v8ScenarioRows" class="v8-scenarios"></div>
+  <div class="verdict" id="v8Verdict">—</div>
+  <div class="meta" id="v8Meta">Este é um teste técnico sintético e não representa lucro no mercado real.</div>
+ </section>
 </main>
 <footer><span>BTC Scalper AI · Somente paper trading</span><a href="/laboratorio">Histórico técnico</a></footer>
 </div>
@@ -137,7 +152,42 @@ async function testV7(){
   set('status','● V7 · TESTE INDISPONÍVEL');
  }finally{button.disabled=false;button.textContent='↻ Testar V7 novamente'}
 }
+const escapeText=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+async function testV8(){
+ const button=byId('testV8');
+ button.disabled=true;button.textContent='Executando cenários V8…';
+ const area=byId('v8Result');area.hidden=false;
+ set('v8Status','Executando');byId('v8Status').className='result-pill';
+ set('v8Time','Verificando entrada virtual, stop e saída por tempo…');
+ try{
+  const response=await fetch('/test-v8',{method:'POST',cache:'no-store'});
+  const data=await response.json();
+  if(!response.ok||data.version!=='V8')throw Error(data.error||'Não foi possível executar os cenários');
+  const cases=data.scenarios||[],passed=data.status==='passed'&&cases.length===3&&data.mode==='in_memory_only'&&data.persisted_to_v7_state===false&&data.order_execution==='none';
+  set('v8Time','Teste em '+new Date().toLocaleString('pt-BR',{dateStyle:'short',timeStyle:'short'})+' · Preços sintéticos');
+  set('v8Status',passed?'Mecânica OK':'REVISAR');byId('v8Status').className='result-pill'+(passed?'':' fail');
+  set('v8Checks',data.checks_passed+' / '+data.checks_total);
+  set('v8Scenarios',cases.filter(x=>x.status==='passed').length+' / '+cases.length);
+  const labels={STOP_LOSS:'Stop-loss',MAX_HOLD:'Saída por tempo',DATA_GAP:'Lacuna de candles'};
+  const rows=cases.map(x=>{
+   const stop=x.scenario==='STOP_LOSS',hold=x.scenario==='MAX_HOLD',gap=x.scenario==='DATA_GAP';
+   const lines=gap?'Sem operação fictícia · Conta preservada':('Entrada '+money(x.entry_price_usdt)+' · Saída '+money(x.exit_price_usdt)+' / BTC<br>Taxas '+money(x.fees_usdt)+' · Slippage '+money(x.slippage_usdt)+'<br>Resultado líquido do cenário: <b>'+money(x.net_usdt)+'</b>');
+   return '<div class="scenario"><div class="scenario-head"><strong>'+escapeText(labels[x.scenario]||x.scenario)+'</strong><span class="'+(x.status==='passed'?'':'failed')+'">'+(x.status==='passed'?'PASSOU':'FALHOU')+' · '+x.checks_passed+'/'+x.checks_total+'</span></div><small>'+lines+'</small></div>';
+  }).join('');
+  byId('v8ScenarioRows').innerHTML=rows;
+  set('v8Verdict',passed?'Teste técnico concluído: a simulação conseguiu fazer entrada, saída por stop, saída por tempo e conciliar taxas e saldo. Os cenários usam preços artificiais.':'O teste encontrou inconsistências nos cenários de execução. Ainda não é possível aprovar a mecânica.');
+  set('v8Meta','Preços e sinais de teste são artificiais · Nenhuma ordem de corretora · Nenhuma mudança na V7 · Não mede rentabilidade futura.');
+  set('status',passed?'● V8 · TESTE TÉCNICO OK':'● V8 · REVISAR');
+ }catch(error){
+  set('v8Time','Falha na execução dos cenários');set('v8Status','ERRO');
+  byId('v8Status').className='result-pill fail';
+  set('v8Checks','—');set('v8Scenarios','—');byId('v8ScenarioRows').textContent='';
+  set('v8Verdict','Teste V8 não concluído: '+error.message+'.');
+  set('status','● V8 · TESTE INDISPONÍVEL');
+ }finally{button.disabled=false;button.textContent='↻ Testar V8 novamente'}
+}
 byId('testV7').addEventListener('click',testV7);
+byId('testV8').addEventListener('click',testV8);
 </script>
 </body>
 </html>
