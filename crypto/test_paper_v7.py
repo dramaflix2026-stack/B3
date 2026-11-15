@@ -484,6 +484,50 @@ class PaperV7Tests(unittest.TestCase):
         self.assertIsNone(check(stored,paper.PAPER,data_dir))
         self.assertEqual(stored["phase"],"paused_accounting_audit")
 
+    def test_v7_first_dashboard_archives_history_without_deleting_sources(self):
+        from html.parser import HTMLParser
+        html = pathlib.Path(__file__).with_name("dashboard.html").read_text(encoding="utf-8")
+        class Collector(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.ids = []
+                self.details = []
+                self.depth = 0
+                self.v7_inside_archive = False
+                self.archived_controls = []
+                self.v7_ids = {"paperpanel", "paperstatus", "paperaudit",
+                               "paperjournal", "v7headfeed", "v7headcandles"}
+            def handle_starttag(self, tag, attrs):
+                attrs = dict(attrs)
+                if tag == "details" and attrs.get("id") == "historical-research":
+                    self.depth += 1
+                    self.details.append("historical-research")
+                elif tag == "details":
+                    self.details.append(attrs.get("id") or "other")
+                value = attrs.get("id")
+                if value:
+                    self.ids.append(value)
+                    if "historical-research" in self.details and value in self.v7_ids:
+                        self.v7_inside_archive = True
+                    if "historical-research" in self.details and value in {"runbtn", "v5btn", "v6btn", "labrobot", "ledgerrobot"}:
+                        self.archived_controls.append(value)
+            def handle_endtag(self, tag):
+                if tag == "details" and self.details:
+                    self.details.pop()
+        doc=Collector()
+        doc.feed(html)
+        self.assertFalse(doc.v7_inside_archive)
+        self.assertIn("historical-research", html)
+        self.assertIn("Estudo histórico V7", html)
+        for value in doc.v7_ids:
+            self.assertEqual(doc.ids.count(value), 1, value)
+        self.assertEqual(len(doc.ids), len(set(doc.ids)), "Duplicate HTML IDs")
+        self.assertTrue({"runbtn", "v5btn", "v6btn", "labrobot", "ledgerrobot"}.issubset(set(doc.archived_controls)))
+        self.assertLess(html.index('class="v7-overview"'), html.index('id="historical-research"'))
+        self.assertLess(html.index('id="paperstatus"'), html.index('id="historical-research"'))
+        self.assertIn("loadPaperV7();", html)
+        self.assertIn("setInterval(loadPaperV7,30000)", html)
+
     def test_atomic_persistence_and_readonly_snapshot(self):
         paper.atomic_save(self.state)
         self.assertEqual(paper._load()["activation_ms"], self.state["activation_ms"])
