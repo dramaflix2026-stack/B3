@@ -29,7 +29,9 @@ def diagnostics(state, worker_state, now_ms):
     age = max(0.0, (now_ms-latest_ms-60_000) / 60_000)
     feed_phase = state.get("phase")
     worker_phase = worker_state.get("phase")
-    if feed_phase == "paused_data_gap":
+    if feed_phase == "paused_accounting_audit":
+        feed_status = "paused_accounting_audit"
+    elif feed_phase == "paused_data_gap":
         feed_status = "paused_data_gap"
     elif worker_phase == "feed_error":
         feed_status = "source_error"
@@ -68,6 +70,8 @@ def diagnostics(state, worker_state, now_ms):
             "worker": worker_phase,
             "last_error": state.get("error") or worker_state.get("last_error"),
             "alerts": ([("Dados com atraso superior a 5 minutos" if feed_status == "stale"
+                         else "Auditoria contábil reprovada; operações virtuais pausadas"
+                         if feed_status == "paused_accounting_audit"
                          else "Lacuna detectada; conta virtual pausada"
                          if feed_status == "paused_data_gap"
                          else "Falha na fonte pública; verifique a última coleta"
