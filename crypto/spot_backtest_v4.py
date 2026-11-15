@@ -13,7 +13,7 @@ HOLD=720
 COOLDOWN=360
 MIN_VOL=.008
 MIN_EDGE=.006
-def test(on_progress=None, robot_ids=None, settings=None):
+def test(on_progress=None, robot_ids=None, settings=None, windows=None):
  settings=settings or {}
  stop=float(settings.get("stop_pct",STOP*100))/100
  edge=float(settings.get("min_edge_pct",MIN_EDGE*100))/100
@@ -29,7 +29,8 @@ def test(on_progress=None, robot_ids=None, settings=None):
   k=k_id-1
   out=[]
   progress_index=selected.index(k_id)
-  for start,end in ((0,cutoff),(cutoff,total)):
+  periods=([(int(total*a/5),int(total*(a+1)/5)) for a in range(5)] if windows=="five" else [(0,cutoff),(cutoff,total)])
+  for window_index,(start,end) in enumerate(periods):
    cash=START_CASH;btc=0.;entry=0.;entry_fee=0.;opened=-1;cool=0;pending=False
    closes=deque(maxlen=720);prev_ms=None;trades=0;wins=0;fees=0.;gross=0.;peak=START_CASH;maxdd=0.;gaps=0;halted=False
    index=0;last_close=None;first_open=None;sum60=0.;sum240=0.;sum720=0.
@@ -74,7 +75,7 @@ def test(on_progress=None, robot_ids=None, settings=None):
       if n>=720:sum720-=closes[0]
       closes.append(c)
       sum60+=c;sum240+=c;sum720+=c
-      if on_progress and i%50000==0:on_progress(k+1,(progress_index*total+i)/ (len(selected)*total)*100)
+      if on_progress and i%50000==0:on_progress(k+1,((progress_index*len(periods)+window_index+(i-start)/(end-start))/(len(selected)*len(periods)))*100)
       if not btc and not cool and not halted and i<end-1 and not discontinuity:
        pending=False
        if len(closes)>=720:
@@ -94,8 +95,8 @@ def test(on_progress=None, robot_ids=None, settings=None):
    benchmark_qty=START_CASH/(first_open*(1+FEE)) if first_open else 0
    benchmark_net=benchmark_qty*(last_close or 0)*(1-FEE)-START_CASH
    out.append({"buy_hold_net_usdt":round(benchmark_net,2),"net_usdt":round(equity-START_CASH,2),"ending_equity_usdt":round(equity,2),"trades":trades,"win_rate_pct":round(100*wins/trades,2) if trades else 0,"max_realized_drawdown_usdt":round(maxdd,2),"fees_usdt":round(fees,2),"gross_usdt":round(gross,2),"gap_events":gaps,"risk_halt":halted})
-  robots[str(k+1)]={"development":out[0],"validation":out[1]}
+  robots[str(k+1)]=({"windows":[{"index":j+1,"start_candle":a,"end_candle_exclusive":b,**out[j]} for j,(a,b) in enumerate(periods)]} if windows=="five" else {"development":out[0],"validation":out[1]})
   if on_progress:on_progress(k+1,(progress_index+1)/len(selected)*100.)
   print(f"V4 BACKTEST robot {k+1}/4 complete",flush=True)
- return {"status":"complete","version":"spot-v4-experimental","candles":total,"months":len(files),"assumptions":{"capital_usdt":START_CASH,"spot_only":True,"shorts":False,"fee_rate_per_side":FEE,"slippage_fraction_per_side":SLIP,"stop_pct":stop*100,"risk_budget_pct":RISK*100,"max_position_allocation_pct":MAX_ALLOC*100,"halt_at_equity_usdt":500,"split":"70% development / 30% previously inspected validation; NOT untouched out-of-sample","min_volatility_60m_pct":MIN_VOL*100,"min_edge_pct":edge*100,"cooldown_minutes":cooldown,"max_hold_minutes":hold,"caveats":"Exploratory OHLC simulation, no orderbook/latency; stop gap slippage may exceed threshold; no real trading"},"robots":robots,"settings":settings,"selected_robots":selected}
+ return {"status":"complete","version":"spot-v4-five-chronological-windows" if windows=="five" else "spot-v4-experimental","candles":total,"months":len(files),"assumptions":{"capital_usdt":START_CASH,"spot_only":True,"shorts":False,"fee_rate_per_side":FEE,"slippage_fraction_per_side":SLIP,"stop_pct":stop*100,"risk_budget_pct":RISK*100,"max_position_allocation_pct":MAX_ALLOC*100,"halt_at_equity_usdt":500,"split":"Five chronological nonoverlapping windows, fixed parameters; NOT a true walk-forward retraining or untouched out-of-sample" if windows=="five" else "70% development / 30% previously inspected validation; NOT untouched out-of-sample","min_volatility_60m_pct":MIN_VOL*100,"min_edge_pct":edge*100,"cooldown_minutes":cooldown,"max_hold_minutes":hold,"caveats":"Exploratory OHLC simulation, no orderbook/latency; stop gap slippage may exceed threshold; no real trading"},"robots":robots,"settings":settings,"selected_robots":selected}
 if __name__=="__main__":print(json.dumps(test(),indent=2))
