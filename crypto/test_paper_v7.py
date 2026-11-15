@@ -511,7 +511,7 @@ class PaperV7Tests(unittest.TestCase):
         self.assertIn("Testar V8",main)
         self.assertIn("Testar V9",main)
         self.assertIn("fetch(\'/test-v9\'",main)
-        self.assertIn(\'id="v9Result" hidden\',main)
+        self.assertIn('id="v9Result" hidden',main)
         self.assertIn("fetch('/test-v8'",main)
         self.assertIn('id="v8Result" hidden',main)
         self.assertIn("Nenhuma mudança na V7",main)
