@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Coleta em segundo plano e expõe progresso; sem endpoints de negociação."""
-import datetime as dt,glob,http.server,json,os,pathlib,threading,traceback
+import datetime as dt,glob,http.server,json,os,pathlib,threading,traceback,urllib.parse
 from download_history import run
 from stream_backtest import test
 DATA=pathlib.Path(os.environ.get("CRYPTO_DATA_DIR","/data/crypto"))
@@ -21,19 +21,21 @@ def collect():
   status.update(phase="complete" if len(records)==expected else "partial",months=len(records),expected_months=expected,candles=sum(r["rows"] for r in records))
   if len(records)==expected:
    status["backtest"]="running"
-   result=test()
+   result=test(lambda k: status.update(backtest_robot_completed=k))
    (DATA/"backtest-results.json").write_text(json.dumps(result,indent=2,ensure_ascii=False))
    status["backtest"]="complete"
+   print("BACKTEST COMPLETE: 4 robots, 60 months",flush=True)
  except Exception as e:
   status.update(phase="error",error=str(e));traceback.print_exc()
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
-  if self.path not in ("/","/health","/status","/backtest"):
+  path=urllib.parse.urlsplit(self.path).path
+  if path not in ("/","/health","/status","/backtest"):
    self.send_error(404);return
   manifest=DATA/"BTCUSDT-manifest.json"
   records=json.loads(manifest.read_text()) if manifest.exists() else []
   payload={**status,"months_verified":len(records),"candles_verified":sum(x["rows"] for x in records),"gap_events":sum(len(x.get("gaps",[])) for x in records),"last_month":records[-1]["month"] if records else None,"note":"Historical research only; no live trading"}
-  if self.path=="/backtest":
+  if path=="/backtest":
    report=DATA/"backtest-results.json"
    payload=json.loads(report.read_text()) if report.exists() else {"status":status.get("backtest","pending"),"phase":status.get("phase"),"error":status.get("error")}
   body=json.dumps(payload).encode()
