@@ -267,6 +267,117 @@ class PaperV7Tests(unittest.TestCase):
         self.assertEqual(rows[1]["signals"],1)
         self.assertEqual(rows[0]["atr_blocked"],1)
 
+    def _auditable_source(self):
+        import hashlib
+        data_dir = pathlib.Path(self.tmp.name)/"data"
+        report = data_dir/"v7"/"test-only.json"
+        report.parent.mkdir(parents=True,exist_ok=True)
+        report.write_bytes(b'{"version":"test-frozen-file"}')
+        self.state["frozen"]["sha256"] = hashlib.sha256(report.read_bytes()).hexdigest()
+        return data_dir
+
+    def test_independent_audit_when_no_trades(self):
+        from paper_v7_audit import audit
+        data_dir = self._auditable_source()
+        paper.atomic_save(self.state)
+        result = audit(self.state, paper.PAPER, data_dir)
+        self.assertEqual(result["status"], "passed", result["checks"])
+        self.assertEqual(result["trades_checked"], 0)
+        self.assertEqual(result["checks_passed"], result["checks_total"])
+        self.assertEqual(result["accounting"]["marked_equity_usdt"], 1000)
+        self.assertEqual(result["accounting"]["commissions_usdt"], 0)
+        self.assertEqual(self.state["frozen"]["control_decision"], "cash")
+
+    def test_independent_audit_after_buy_and_stop(self):
+        from paper_v7_audit import audit
+        data_dir = self._auditable_source()
+        self.state["pending"]={"atr":.2,"atr_pct":.2,"signal_ms":self.state["last_ms"]}
+        candle_next=candle(self.state["last_ms"]+MINUTE,o=100,h=100.2,l=98,c=99)
+        paper.process_candle(self.state,candle_next)
+        paper.atomic_save(self.state)
+        result=audit(self.state,paper.PAPER,data_dir)
+        self.assertEqual(result["status"],"passed",result["checks"])
+        self.assertEqual(result["trades_checked"],1)
+        self.assertEqual(result["accounting"]["realized_usdt"],round(self.state["realized"],4))
+
+    def test_independent_audit_detects_cash_tamper(self):
+        from paper_v7_audit import audit
+        data_dir=self._auditable_source()
+        self.state["cash"]+=50
+        result=audit(self.state,paper.PAPER,data_dir)
+        self.assertEqual(result["status"],"failed")
+        self.assertIn("cash_reconciliation",result["failures"])
+
+    def test_independent_audit_detects_frozen_source_mismatch(self):
+        from paper_v7_audit import audit
+        data_dir=self._auditable_source()
+        (data_dir/"v7"/"test-only.json").write_bytes(b'changed')
+        result=audit(self.state,paper.PAPER,data_dir)
+        self.assertEqual(result["status"],"failed")
+        self.assertIn("source_checksum",result["failures"])
+
+    def test_independent_audit_detects_corrupt_trade(self):
+        from paper_v7_audit import audit
+        import json
+        data_dir=self._auditable_source()
+        self.state["pending"]={"atr":.2,"atr_pct":.2,"signal_ms":self.state["last_ms"]}
+        paper.process_candle(self.state,candle(self.state["last_ms"]+MINUTE,o=100,h=100.2,l=98,c=99))
+        paper.atomic_save(self.state)
+        journal=paper.PAPER/"archive"/"0000000001.json"
+        record=json.loads(journal.read_text())
+        record["trade"]["net_usdt"]+=100
+        journal.write_text(json.dumps(record))
+        result=audit(self.state,paper.PAPER,data_dir)
+        self.assertEqual(result["status"],"failed")
+        self.assertIn("recent_ledger_match",result["failures"])
+        self.assertIn("trade_cost_identity",result["failures"])
+
+    def test_v6_robot9_breakout_rule_and_frozen_atr_parity(self):
+        # Independent conditions from V6: trend 60>240>720,
+        # range 240 >=.009, price > slow*1.006,
+        # price > previous 240-high*1.006, extension under .016.
+        state=self.state
+        prices=[100+i*.02 for i in range(720)]
+        state["closes"]=list(prices)
+        state["previous_close"]=prices[-1]
+        state["last_price"]=prices[-1]
+        state["tranges"]=[.01]*14
+        new_price=115.12
+        row=candle(state["last_ms"]+MINUTE,o=prices[-1],h=115.14,l=prices[-1]-.01,c=new_price)
+        paper.process_candle(state,row)
+        self.assertEqual(state["signals"],1)
+        self.assertIsNotNone(state["pending"])
+        self.assertEqual(state["blocked"],0)
+        fast=sum(state["closes"][-60:])/60
+        mid=sum(state["closes"][-240:])/240
+        slow=sum(state["closes"])/720
+        volatility=(max(state["closes"][-240:])-min(state["closes"][-240:]))/new_price
+        prior=max(state["closes"][-241:-1])
+        reference=fast>mid>slow and volatility>=.009 and new_price>slow*1.006 and new_price>prior*1.006 and new_price/fast-1<.016
+        self.assertTrue(reference)
+        self.assertAlmostEqual(state["pending"]["atr_pct"],sum(state["tranges"])/14/new_price*100)
+        following=candle(state["last_ms"]+MINUTE,o=115.13,h=115.18,l=115.10,c=115.16)
+        paper.process_candle(state,following)
+        self.assertGreater(state["btc"],0)
+        self.assertIsNone(state["pending"])
+        self.assertAlmostEqual(state["entry"]["price"],115.13*(1+paper.SLIP))
+        self.assertEqual(state["frozen"]["control_decision"],"cash")
+
+    def test_v6_robot9_preentry_atr_gate_can_reject_signal(self):
+        state=self.state
+        state["frozen"]["shadow_atr"]["threshold_pct"]=.0001
+        prices=[100+i*.02 for i in range(720)]
+        state["closes"]=list(prices)
+        state["previous_close"]=prices[-1]
+        state["tranges"]=[.01]*14
+        row=candle(state["last_ms"]+MINUTE,o=prices[-1],h=115.14,l=prices[-1]-.01,c=115.12)
+        paper.process_candle(state,row)
+        self.assertEqual(state["signals"],1)
+        self.assertEqual(state["blocked"],1)
+        self.assertIsNone(state["pending"])
+        self.assertEqual(state["cash"],1000)
+        self.assertEqual(state["frozen"]["control_decision"],"cash")
+
     def test_atomic_persistence_and_readonly_snapshot(self):
         paper.atomic_save(self.state)
         self.assertEqual(paper._load()["activation_ms"], self.state["activation_ms"])
