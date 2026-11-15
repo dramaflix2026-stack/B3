@@ -10,6 +10,7 @@ from trade_diagnostics import analyze as analyze_trade_diagnostics
 from entry_quality import analyze as analyze_entry_quality
 from v7_atr_walkforward import run as run_v7_atr
 from paper_v7 import loop as paper_v7_loop, snapshot as paper_v7_snapshot, journal_page as paper_v7_journal_page, audit_snapshot as paper_v7_audit_snapshot
+from v8_execution_test import run as run_v8_synthetic
 DATA=pathlib.Path(os.environ.get("CRYPTO_DATA_DIR","/data/crypto"))
 START=os.environ.get("CRYPTO_START","2021-11")
 END=os.environ.get("CRYPTO_END","2026-10")
@@ -368,8 +369,15 @@ def start_experiment(payload):
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_POST(self):
   path=urllib.parse.urlsplit(self.path).path
-  if path not in ("/run-backtest","/run-experiment","/run-batch","/run-windows","/run-v5","/run-v6","/run-trade-ledger","/run-v7"):self.send_error(404);return
-  if path=="/run-v7":code,payload=start_v7()
+  if path not in ("/run-backtest","/run-experiment","/run-batch","/run-windows","/run-v5","/run-v6","/run-trade-ledger","/run-v7","/test-v8"):self.send_error(404);return
+  if path=="/test-v8":
+   # Read-only deterministic simulation in RAM; never touches V7 state.
+   try:
+    payload=run_v8_synthetic()
+    code=200 if payload["status"]=="passed" else 422
+   except Exception as exc:
+    code,payload=500,{"version":"V8","status":"error","error":type(exc).__name__+": "+str(exc)[:150]}
+  elif path=="/run-v7":code,payload=start_v7()
   elif path=="/run-trade-ledger":
    try:
     length=int(self.headers.get("Content-Length","0"))
