@@ -110,7 +110,6 @@ def run(data_dir=None):
     # One signal may be pending, but signal count equals all candles passing the ATR stage.
     funnel_signals=passed["atr"]
     exact=funnel_signals==state["signals"]
-    blocked_atr=sum(1 for _ in ())  # Count from the funnel before ATR instead.
     blocked_atr=passed["available"]-passed["atr"]
     checks={
         "real_candles":count==len(candles)-WARMUP_CANDLES,
