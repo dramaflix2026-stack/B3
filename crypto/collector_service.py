@@ -15,6 +15,9 @@ def collect():
   canonical=DATA/"BTCUSDT-manifest.json"
   if old.exists() and not canonical.exists(): canonical.write_bytes(old.read_bytes())
   run(START,END,DATA,"BTCUSDT")
+  if path=="/":
+   body=(pathlib.Path(__file__).parent/"dashboard.html").read_bytes()
+   self.send_response(200);self.send_header("Content-Type","text/html; charset=utf-8");self.send_header("Content-Length",str(len(body)));self.end_headers();self.wfile.write(body);return
   manifest=DATA/"BTCUSDT-manifest.json"
   records=json.loads(manifest.read_text()) if manifest.exists() else []
   expected=(int(END[:4])-int(START[:4]))*12+int(END[5:])-int(START[5:])+1
