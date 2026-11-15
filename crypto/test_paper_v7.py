@@ -201,6 +201,72 @@ class PaperV7Tests(unittest.TestCase):
         self.assertEqual(result["status"],"partial")
         self.assertEqual(result["missing_sequences"],[2,1])
 
+    def test_daily_stats_count_only_new_closed_candles(self):
+        from paper_v7_daily import status as daily_status
+        original = self.state["last_ms"]
+        self.assertNotIn("daily_activity_utc", self.state)
+        paper.process_candle(self.state, candle(original+MINUTE))
+        paper.process_candle(self.state, candle(original+MINUTE))  # duplicate
+        report = daily_status(self.state, self.state["last_ms"]+MINUTE)
+        self.assertEqual(report["observed_days_in_retained_window"], 1)
+        self.assertEqual(report["last_30_days_utc"][0]["candles"], 1)
+        self.assertEqual(report["closed_trades_since_activation"], 0)
+        self.assertEqual(report["approval"], "not_approved")
+        self.assertFalse(report["minimum_research_sample_reached"])
+        self.assertEqual(report["days_remaining_in_observed_window"], 29)
+        paper.atomic_save(self.state)
+        restored = paper._load()
+        paper.process_candle(restored, candle(restored["last_ms"]+MINUTE))
+        self.assertEqual(restored["daily_activity_utc"][0]["candles"], 2)
+
+    def test_daily_same_candle_entry_exit_reconciles_costs_and_net(self):
+        self.state["pending"] = {"atr": .2, "atr_pct": .2, "signal_ms": self.state["last_ms"]}
+        nxt = candle(self.state["last_ms"]+MINUTE,o=100,h=100.2,l=98,c=99)
+        paper.process_candle(self.state, nxt)
+        day = self.state["daily_activity_utc"][-1]
+        self.assertEqual(day["candles"], 1)
+        self.assertEqual(day["entries"], 1)
+        self.assertEqual(day["closed_trades"], 1)
+        self.assertAlmostEqual(day["fees_paid_usdt"], self.state["fees"], places=4)
+        self.assertAlmostEqual(day["slippage_paid_usdt"], self.state["slippage"], places=4)
+        self.assertAlmostEqual(day["realized_net_on_exit_usdt"], self.state["realized"], places=4)
+        self.assertEqual(self.state["frozen"]["control_decision"], "cash")
+
+    def test_operational_alerts_stale_gap_archive_and_no_real_orders(self):
+        from paper_v7_daily import alerts
+        stale = alerts(self.state, {"phase":"running"}, self.state["last_ms"]+7*MINUTE,
+                       {"status":"complete"})
+        codes = [x["code"] for x in stale["active"]]
+        self.assertIn("feed_stale", codes)
+        self.assertIn("sample_small", codes)
+        self.assertEqual(stale["notification_mode"], "in_dashboard_only")
+        self.assertEqual(stale["critical"], 0)
+        self.state["phase"] = "paused_data_gap"
+        self.state["max_close_drawdown_pct"] = 7.5
+        with_gap = alerts(self.state, {"phase":"running"}, self.state["last_ms"]+MINUTE,
+                          {"status":"partial","missing":2})
+        codes = [x["code"] for x in with_gap["active"]]
+        self.assertIn("feed_gap", codes)
+        self.assertIn("journal_incomplete", codes)
+        self.assertIn("drawdown_high", codes)
+        self.assertEqual(with_gap["critical"], 2)
+        self.assertEqual(self.state["frozen"]["control_decision"], "cash")
+
+    def test_daily_metrics_preserve_utc_date_boundary_without_backfill(self):
+        from paper_v7_daily import record_candle, status as daily_status
+        import datetime as dt
+        start = int(dt.datetime(2026,11,15,23,59,tzinfo=dt.timezone.utc).timestamp()*1000)
+        record_candle(self.state,start,signals=1,blocked=0,entries=0,exits=0,
+                      fee_delta=0,slippage_delta=0,realized_delta=0)
+        record_candle(self.state,start+MINUTE,signals=0,blocked=1,entries=0,exits=0,
+                      fee_delta=0,slippage_delta=0,realized_delta=0)
+        rows = daily_status(self.state,start+2*MINUTE)["last_30_days_utc"]
+        self.assertEqual(len(rows),2)
+        self.assertEqual(rows[0]["date_utc"],"2026-11-16")
+        self.assertEqual(rows[1]["date_utc"],"2026-11-15")
+        self.assertEqual(rows[1]["signals"],1)
+        self.assertEqual(rows[0]["atr_blocked"],1)
+
     def test_atomic_persistence_and_readonly_snapshot(self):
         paper.atomic_save(self.state)
         self.assertEqual(paper._load()["activation_ms"], self.state["activation_ms"])
