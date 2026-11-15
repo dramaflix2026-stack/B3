@@ -140,6 +140,12 @@ def new_state(ready_candles, freeze):
         "cool": 0, "fees": 0.0, "slippage": 0.0,
         "realized": 0.0, "processed": 0, "signals": 0, "blocked": 0,
         "total_trades": 0,
+        "equity_monitoring_started_ms": candles[-1]["ms"],
+        "equity_peak_usdt": INITIAL_CASH,
+        "max_close_drawdown_usdt": 0.0,
+        "max_close_drawdown_pct": 0.0,
+        "last_close_equity_usdt": INITIAL_CASH,
+        "daily_close_equity_utc": [],
         "trades": [], "events": [],
         "feed_last_success_utc": now_iso(),
         "error": None,
@@ -165,6 +171,43 @@ def _signal_metrics(state, close):
     return {"entry_signal": breakout, "atr": atr,
             "atr_pct": atr / close * 100, "ma60": fast,
             "ma240": mid, "ma720": slow, "vol_pct": vol*100}
+
+def record_close_equity(state, candle_ms, close_price):
+    """Persist mark-to-market equity at each CLOSED candle; never use future prices.
+
+    Includes open position at candle CLOSE, but excludes hypothetical liquidation
+    commissions and intraminute minima. Legacy accounts start a new, explicitly
+    timestamped risk series rather than retroactively inventing past drawdown.
+    """
+    if "equity_peak_usdt" not in state:
+        previous_equity = float(state["cash"]) + float(state["btc"]) * float(state["last_price"])
+        state["equity_monitoring_started_ms"] = int(state["last_ms"])
+        state["equity_peak_usdt"] = previous_equity
+        state["max_close_drawdown_usdt"] = 0.0
+        state["max_close_drawdown_pct"] = 0.0
+        state["last_close_equity_usdt"] = previous_equity
+        state["daily_close_equity_utc"] = []
+
+    equity = float(state["cash"]) + float(state["btc"]) * close_price
+    peak = max(float(state["equity_peak_usdt"]), equity)
+    drawdown = max(0.0, peak - equity)
+    dd_pct = 100.0 * drawdown / peak if peak > 0 else 0.0
+    state["equity_peak_usdt"] = peak
+    state["max_close_drawdown_usdt"] = max(float(state["max_close_drawdown_usdt"]), drawdown)
+    state["max_close_drawdown_pct"] = max(float(state["max_close_drawdown_pct"]), dd_pct)
+    state["last_close_equity_usdt"] = equity
+
+    day = utc_iso(candle_ms)[:10]
+    daily = state["daily_close_equity_utc"]
+    point = {"day_utc": day, "last_candle_utc": utc_iso(candle_ms),
+             "equity_usdt": round(equity, 4),
+             "pnl_usdt": round(equity - INITIAL_CASH, 4),
+             "btc_position_open": state["btc"] > 0}
+    if daily and daily[-1]["day_utc"] == day:
+        daily[-1] = point
+    else:
+        daily.append(point)
+        state["daily_close_equity_utc"] = daily[-90:]
 
 def process_candle(state, candle):
     """Advance exactly one CLOSED 1m candle, persisting after each batch."""
@@ -264,6 +307,7 @@ def process_candle(state, candle):
             _event(state, "paper_signal", ms, "Sinal ATR experimental; entrada virtual no próximo candle")
         else:
             state["blocked"] += 1
+    record_close_equity(state, ms, c)
     state["last_ms"] = ms
     state["last_price"] = c
     state["processed"] += 1
