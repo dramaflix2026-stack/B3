@@ -4,6 +4,7 @@ import tempfile
 import unittest
 
 import paper_v7 as paper
+from paper_v7_analytics import diagnostics as audit
 
 MINUTE = 60000
 
@@ -69,6 +70,36 @@ class PaperV7Tests(unittest.TestCase):
         self.assertEqual(self.state["phase"], "paused_data_gap")
         self.assertEqual(self.state["processed"], 0)
         self.assertEqual(self.state["trades"], [])
+
+    def test_feed_staleness_and_sample_warning(self):
+        result = audit(self.state, {"phase": "running"}, self.state["last_ms"]+7*MINUTE)
+        self.assertEqual(result["feed"]["status"], "stale")
+        self.assertFalse(result["paper"]["sufficient_sample"])
+        self.assertEqual(result["paper"]["total_trades_recorded"], 0)
+        self.assertIsNone(result["paper"]["profit_factor_recent"])
+        self.assertTrue(result["rules"]["no_real_orders"])
+
+    def test_closed_trade_metrics_and_legacy_counter(self):
+        self.state.pop("total_trades")  # existing state created before counter release
+        self.state["pending"] = {"atr": .2, "atr_pct": .2, "signal_ms": self.state["last_ms"]}
+        nxt = candle(self.state["last_ms"]+MINUTE, o=100, h=100.2, l=98.0, c=99.0)
+        paper.process_candle(self.state, nxt)
+        result = audit(self.state, {"phase": "running"}, self.state["last_ms"]+MINUTE)
+        self.assertEqual(result["feed"]["status"], "healthy")
+        self.assertEqual(result["paper"]["total_trades_recorded"], 1)
+        self.assertLess(result["paper"]["realized_net_usdt"], 0)
+        self.assertGreater(result["paper"]["fees_usdt_all"], 0)
+        self.assertGreater(result["paper"]["slippage_usdt_all"], 0)
+        self.assertEqual(result["paper"]["win_rate_pct_recent"], 0)
+        self.assertEqual(result["paper"]["daily_utc_recent"][0]["trades"], 1)
+        self.assertEqual(self.state["frozen"]["control_decision"], "cash")
+
+    def test_gap_is_an_alert_and_not_a_trade(self):
+        paper.process_candle(self.state, candle(self.state["last_ms"]+2*MINUTE))
+        result = audit(self.state, {"phase": "running"}, self.state["last_ms"]+3*MINUTE)
+        self.assertEqual(result["feed"]["status"], "paused_data_gap")
+        self.assertTrue(result["feed"]["alerts"])
+        self.assertEqual(result["paper"]["total_trades_recorded"], 0)
 
     def test_atomic_persistence_and_readonly_snapshot(self):
         paper.atomic_save(self.state)
