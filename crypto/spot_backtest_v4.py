@@ -24,7 +24,7 @@ def test(on_progress=None):
   for start,end in ((0,cutoff),(cutoff,total)):
    cash=START_CASH;btc=0.;entry=0.;entry_fee=0.;opened=-1;cool=0;pending=False
    closes=deque(maxlen=720);prev_ms=None;trades=0;wins=0;fees=0.;gross=0.;peak=START_CASH;maxdd=0.;gaps=0;halted=False
-   index=0;last_close=None
+   index=0;last_close=None;first_open=None
    for file in files:
     with open(file,newline="",encoding="utf-8") as stream:
      for row in csv.DictReader(stream):
@@ -33,6 +33,7 @@ def test(on_progress=None):
       if i>=end:break
       ts=row["timestamp"];ms=int(datetime.datetime.fromisoformat(ts.replace("Z","+00:00")).timestamp()*1000)
       o,h,l,c=[float(row[x]) for x in ("open","high","low","close")]
+      if first_open is None:first_open=o
       if min(o,h,l,c)<=0 or h<max(o,c) or l>min(o,c):raise ValueError("Invalid OHLC")
       discontinuity=prev_ms is not None and ms-prev_ms!=60000
       if discontinuity:
@@ -76,7 +77,9 @@ def test(on_progress=None):
       last_close=c
     if index>=end:break
    equity=cash+btc*(last_close or 0)
-   out.append({"net_usdt":round(equity-START_CASH,2),"ending_equity_usdt":round(equity,2),"trades":trades,"win_rate_pct":round(100*wins/trades,2) if trades else 0,"max_realized_drawdown_usdt":round(maxdd,2),"fees_usdt":round(fees,2),"gross_usdt":round(gross,2),"gap_events":gaps,"risk_halt":halted})
+   benchmark_qty=START_CASH/(first_open*(1+FEE)) if first_open else 0
+   benchmark_net=benchmark_qty*(last_close or 0)*(1-FEE)-START_CASH
+   out.append({"buy_hold_net_usdt":round(benchmark_net,2),"net_usdt":round(equity-START_CASH,2),"ending_equity_usdt":round(equity,2),"trades":trades,"win_rate_pct":round(100*wins/trades,2) if trades else 0,"max_realized_drawdown_usdt":round(maxdd,2),"fees_usdt":round(fees,2),"gross_usdt":round(gross,2),"gap_events":gaps,"risk_halt":halted})
   robots[str(k+1)]={"development":out[0],"validation":out[1]}
   if on_progress:on_progress(k+1)
   print(f"V4 BACKTEST robot {k+1}/4 complete",flush=True)
