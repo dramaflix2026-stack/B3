@@ -8,7 +8,7 @@ from collections import deque
 def signal(k,closes):
  if len(closes)<26:return 0
  a=sum(list(closes)[-5:])/5;m=sum(list(closes)[-12:])/12;l=sum(list(closes)[-24:])/24
- p=closes[-1];prior=closes[-4];tick=.01
+ p=closes[-1];prior=closes[-4];tick=max(.01,p*.0002) # limiar adaptativo de 0,02% do preço
  if k==0:return 1 if p-prior>3*tick else -1 if prior-p>3*tick else 0
  if k==1:return 1 if a>m+tick else -1 if a<m-tick else 0
  if k==2:return 1 if p<l-4*tick else -1 if p>l+4*tick else 0
