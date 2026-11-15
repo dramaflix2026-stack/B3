@@ -501,15 +501,17 @@ class PaperV7Tests(unittest.TestCase):
                     self.buttons.append(attrs)
         page=Page();page.feed(main)
         self.assertEqual(len(page.ids),len(set(page.ids)))
-        self.assertEqual(len(page.buttons),1,"Main panel has exactly one test button")
-        self.assertEqual(page.buttons[0].get("id"),"testV7")
+        self.assertEqual(len(page.buttons),2,"One test button per implemented version")
+        self.assertEqual([btn.get("id") for btn in page.buttons],["testV7","testV8"])
         self.assertIn("▶ Testar V7",main)
         self.assertIn('id="testResult" hidden',main)
         self.assertIn("fetch('/paper-v7'",main)
         self.assertIn("fetch('/paper-v7-audit'",main)
         self.assertIn("V8",main)
-        self.assertIn("Indisponível",main)
-        self.assertNotIn("Testar V8",main)
+        self.assertIn("Testar V8",main)
+        self.assertIn("fetch('/test-v8'",main)
+        self.assertIn('id="v8Result" hidden',main)
+        self.assertIn("Nenhuma mudança na V7",main)
         self.assertNotIn('id="runbtn"',main)
         self.assertNotIn('id="labrobot"',main)
         self.assertIn('href="/laboratorio"',main)
@@ -532,12 +534,66 @@ class PaperV7Tests(unittest.TestCase):
                 self.assertEqual(response.status,200)
                 html=response.read().decode()
                 self.assertIn('id="testV7"',html)
+                self.assertIn('id="testV8"',html)
                 self.assertNotIn('id="runbtn"',html)
             with urllib.request.urlopen(base+"/laboratorio",timeout=4) as response:
                 self.assertEqual(response.status,200)
                 html=response.read().decode()
                 self.assertIn('id="runbtn"',html)
                 self.assertIn("V7 · Observação",html)
+        finally:
+            server.shutdown();server.server_close();thread.join(3)
+
+    def test_v8_ephemeral_execution_scenarios(self):
+        from v8_execution_test import run
+        result=run()
+        self.assertEqual(result["version"],"V8")
+        self.assertEqual(result["status"],"passed",result)
+        self.assertEqual(result["mode"],"in_memory_only")
+        self.assertIs(result["persisted_to_v7_state"],False)
+        self.assertEqual(result["order_execution"],"none")
+        self.assertEqual(len(result["scenarios"]),3)
+        self.assertEqual(result["checks_passed"],result["checks_total"])
+        by_name={x["scenario"]:x for x in result["scenarios"]}
+        stop=by_name["STOP_LOSS"]
+        hold=by_name["MAX_HOLD"]
+        gap=by_name["DATA_GAP"]
+        self.assertEqual(stop["exit_reason"],"stop_loss")
+        self.assertEqual(stop["duration_minutes"],1)
+        self.assertLess(stop["net_usdt"],0)
+        self.assertGreater(stop["fees_usdt"],0)
+        self.assertGreater(stop["slippage_usdt"],0)
+        self.assertEqual(hold["exit_reason"],"max_hold")
+        self.assertEqual(hold["duration_minutes"],720)
+        self.assertGreater(hold["net_usdt"],0)
+        self.assertGreater(hold["fees_usdt"],0)
+        self.assertGreater(hold["slippage_usdt"],0)
+        self.assertEqual(gap["status"],"passed")
+        self.assertFalse(paper.STATE_FILE.exists(),"V8 must not create V7 state")
+
+    def test_v8_endpoint_returns_result_without_writing_v7_account(self):
+        import http.server
+        import json
+        import threading
+        import urllib.request
+        import collector_service
+        paper.atomic_save(self.state)
+        saved=paper.STATE_FILE.read_bytes()
+        server=http.server.ThreadingHTTPServer(("127.0.0.1",0),collector_service.Handler)
+        thread=threading.Thread(target=server.serve_forever,daemon=True)
+        thread.start()
+        try:
+            base="http://127.0.0.1:"+str(server.server_address[1])
+            req=urllib.request.Request(base+"/test-v8",data=b"",method="POST")
+            with urllib.request.urlopen(req,timeout=6) as response:
+                self.assertEqual(response.status,200)
+                data=json.load(response)
+            self.assertEqual(data["version"],"V8")
+            self.assertEqual(data["status"],"passed",data)
+            self.assertEqual(data["checks_passed"],data["checks_total"])
+            self.assertEqual(paper.STATE_FILE.read_bytes(),saved,
+                             "V8 must not overwrite the V7 paper state")
+            self.assertEqual(paper._load()["frozen"]["control_decision"],"cash")
         finally:
             server.shutdown();server.server_close();thread.join(3)
 
