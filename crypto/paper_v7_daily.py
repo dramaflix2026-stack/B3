@@ -95,6 +95,10 @@ def alerts(state, worker, now_ms, archive=None):
     def emit(code, severity, label, detail):
         result.append({"code": code, "severity": severity, "label": label, "detail": detail})
 
+    if phase == "paused_accounting_audit":
+        failures = (state.get("audit_guard") or {}).get("failures") or ["unknown"]
+        emit("accounting_audit_failed", "critical", "Auditoria contábil reprovada — paper pausado",
+             "Verificações inconsistentes: " + ", ".join(failures[:6]) + ". Revisão técnica obrigatória.")
     if phase == "paused_data_gap":
         emit("feed_gap", "critical", "Coleta interrompida por lacuna",
              "A simulação foi pausada para não inventar preços ou execuções.")
