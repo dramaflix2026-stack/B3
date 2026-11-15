@@ -2,7 +2,7 @@
 """Coleta em segundo plano e expõe progresso; sem endpoints de negociação."""
 import datetime as dt,glob,http.server,json,os,pathlib,threading,traceback,urllib.parse
 from download_history import run
-from stream_backtest import test
+from spot_backtest_v2 import test
 DATA=pathlib.Path(os.environ.get("CRYPTO_DATA_DIR","/data/crypto"))
 START=os.environ.get("CRYPTO_START","2021-11")
 END=os.environ.get("CRYPTO_END","2026-10")
@@ -22,7 +22,12 @@ def collect():
   if len(records)==expected:
    status["backtest"]="running"
    result=test(lambda k: status.update(backtest_robot_completed=k))
-   (DATA/"backtest-results.json").write_text(json.dumps(result,indent=2,ensure_ascii=False))
+   report=DATA/"backtest-results.json"
+   old=DATA/"backtest-v1-results.json"
+   if report.exists() and not old.exists(): old.write_bytes(report.read_bytes())
+   tmp=DATA/"backtest-results.tmp"
+   tmp.write_text(json.dumps(result,indent=2,ensure_ascii=False))
+   tmp.replace(report)
    status["backtest"]="complete"
    print("BACKTEST COMPLETE: 4 robots, 60 months",flush=True)
  except Exception as e:
