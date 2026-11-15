@@ -10,6 +10,9 @@ PORT=int(os.environ.get("PORT","8080"))
 status={"phase":"starting","start":START,"end":END,"backtest":"idle"}
 lock=threading.Lock()
 last_run=[0.0]
+experiment_status={"state":"idle","progress_pct":0}
+experiment_lock=threading.Lock()
+experiment_last_run=[0.0]
 def collect():
  try:
   status["phase"]="downloading"
@@ -51,16 +54,65 @@ def start_backtest():
   status.update(backtest="running",backtest_robot_completed=0)
   threading.Thread(target=execute_backtest,daemon=True).start()
   return 202,{"status":"running","message":"Backtest V4 iniciado"}
+def execute_experiment(robot,settings):
+ try:
+  def progress(k,pct):
+   experiment_status.update(progress_pct=round(pct,1),current_robot=k)
+  result=test(progress,robot_ids=[robot],settings=settings)
+  result["experiment_created_at"]=dt.datetime.now(dt.timezone.utc).isoformat()
+  folder=DATA/"experiments"
+  folder.mkdir(parents=True,exist_ok=True)
+  identifier=dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%f")
+  output=folder/(identifier+".json")
+  tmp=folder/(identifier+".tmp")
+  tmp.write_text(json.dumps(result,ensure_ascii=False,indent=2))
+  tmp.replace(output)
+  experiment_status.update(state="complete",progress_pct=100,result_id=identifier,error=None)
+  print("EXPERIMENT COMPLETE robot",robot,identifier,flush=True)
+ except Exception as e:
+  experiment_status.update(state="error",error=str(e))
+  traceback.print_exc()
+def start_experiment(payload):
+ try:
+  robot=int(payload.get("robot"))
+  if robot not in (1,2,3,4):raise ValueError("Robô inválido")
+  bounds={"stop_pct":(0.5,5.),"min_edge_pct":(0.1,3.),"cooldown_minutes":(30,1440),"max_hold_minutes":(60,2880)}
+  settings={}
+  for key,(lo,hi) in bounds.items():
+   value=float(payload[key])
+   if not lo<=value<=hi:raise ValueError(key+" fora dos limites")
+   if key.endswith("minutes"):
+    if not value.is_integer():raise ValueError(key+" deve ser inteiro")
+    value=int(value)
+   settings[key]=value
+ except (KeyError,ValueError,TypeError) as e:return 400,{"error":"Parâmetros inválidos: "+str(e)}
+ with experiment_lock:
+  if status.get("phase")!="complete":return 409,{"error":"Histórico ainda não está pronto"}
+  if experiment_status.get("state")=="running" or status.get("backtest")=="running":return 409,{"error":"Já existe um backtest em execução"}
+  if time.monotonic()-experiment_last_run[0]<60:return 429,{"error":"Aguarde um minuto entre experimentos"}
+  experiment_last_run[0]=time.monotonic()
+  experiment_status.update(state="running",progress_pct=0,current_robot=robot,result_id=None,error=None)
+  threading.Thread(target=execute_experiment,args=(robot,settings),daemon=True).start()
+  return 202,{"status":"running","message":"Experimento iniciado"}
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_POST(self):
   path=urllib.parse.urlsplit(self.path).path
-  if path!="/run-backtest":self.send_error(404);return
-  code,payload=start_backtest()
+  if path not in ("/run-backtest","/run-experiment"):self.send_error(404);return
+  if path=="/run-experiment":
+   try:
+    length=int(self.headers.get("Content-Length","0"))
+    if length<2 or length>4096:raise ValueError("Tamanho inválido")
+    request=json.loads(self.rfile.read(length))
+    if not isinstance(request,dict):raise ValueError("Formato inválido")
+   except (ValueError,json.JSONDecodeError):
+    self.send_error(400);return
+   code,payload=start_experiment(request)
+  else:code,payload=start_backtest()
   body=json.dumps(payload).encode()
   self.send_response(code);self.send_header("Content-Type","application/json");self.send_header("Content-Length",str(len(body)));self.end_headers();self.wfile.write(body)
  def do_GET(self):
   path=urllib.parse.urlsplit(self.path).path
-  if path not in ("/","/health","/status","/backtest","/backtest-v2","/backtest-v3"):
+  if path not in ("/","/health","/status","/backtest","/backtest-v2","/backtest-v3","/experiment-status","/experiments"):
    self.send_error(404);return
   if path=="/":
    body=(pathlib.Path(__file__).parent/"dashboard.html").read_bytes()
@@ -68,6 +120,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
   manifest=DATA/"BTCUSDT-manifest.json"
   records=json.loads(manifest.read_text()) if manifest.exists() else []
   payload={**status,"months_verified":len(records),"candles_verified":sum(x["rows"] for x in records),"gap_events":sum(len(x.get("gaps",[])) for x in records),"last_month":records[-1]["month"] if records else None,"note":"Historical research only; no live trading"}
+  if path=="/experiment-status":payload=experiment_status.copy()
+  if path=="/experiments":
+   folder=DATA/"experiments"
+   items=sorted(folder.glob("*.json"),reverse=True)[:12] if folder.exists() else []
+   payload={"experiments":[{"id":p.stem,**json.loads(p.read_text())} for p in items]}
   if path in ("/backtest","/backtest-v2","/backtest-v3"):
    report=DATA/("backtest-v2-results.json" if path=="/backtest-v2" else "backtest-v3-results.json" if path=="/backtest-v3" else "backtest-results.json")
    payload=json.loads(report.read_text()) if report.exists() else {"status":status.get("backtest","pending"),"phase":status.get("phase"),"error":status.get("error")}
