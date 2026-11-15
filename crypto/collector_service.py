@@ -27,8 +27,8 @@ def collect():
   status.update(phase="error",error=str(e));traceback.print_exc()
 def execute_backtest():
  try:
-  status.update(backtest="running",backtest_robot_completed=0,backtest_error=None)
-  result=test(lambda k: status.update(backtest_robot_completed=k))
+  status.update(backtest="running",backtest_robot_completed=0,backtest_progress_pct=0,backtest_error=None)
+  result=test(lambda k,pct: status.update(backtest_robot_completed=max(0,int(pct//25)),backtest_progress_pct=round(pct,1),backtest_current_robot=k))
   report=DATA/"backtest-results.json"
   previous=DATA/"backtest-v3-results.json"
   if report.exists() and not previous.exists():
@@ -37,7 +37,7 @@ def execute_backtest():
   tmp=DATA/"backtest-results.tmp"
   tmp.write_text(json.dumps(result,indent=2,ensure_ascii=False))
   tmp.replace(report)
-  status.update(backtest="complete",backtest_finished_at=dt.datetime.now(dt.timezone.utc).isoformat())
+  status.update(backtest="complete",backtest_progress_pct=100,backtest_robot_completed=4,backtest_finished_at=dt.datetime.now(dt.timezone.utc).isoformat())
   print("V4 BACKTEST COMPLETE: 4 robots, 60 months",flush=True)
  except Exception as e:
   status.update(backtest="error",backtest_error=str(e))
