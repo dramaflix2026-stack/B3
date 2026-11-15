@@ -143,6 +143,103 @@ def execute_v6():
  except Exception as e:
   experiment_status.update(state="error",error=str(e))
   traceback.print_exc()
+def summarize_trade_ledger(trades,report,robot):
+ windows=report["robots"][str(robot)]["windows"]
+ per_window=[]
+ for w in windows:
+  window_trades=[t for t in trades if t["window"]==w["index"]]
+  logged_net=sum(t["net_usdt"] for t in window_trades)
+  if len(window_trades)!=w["trades"] or abs(logged_net-w["net_usdt"])>0.03:
+   raise ValueError("Inconsistência entre operações e resultado da janela "+str(w["index"]))
+  per_window.append({"index":w["index"],"trades":w["trades"],"net_usdt":w["net_usdt"],"fees_usdt":w["fees_usdt"],"max_drawdown_usdt":w["max_realized_drawdown_usdt"]})
+ reasons={}
+ regimes={}
+ for t in trades:
+  for source,key in ((reasons,t["exit_reason"]),(regimes,t["regime_on_entry"])):
+   bucket=source.setdefault(key,{"trades":0,"net_usdt":0.0,"fees_usdt":0.0})
+   bucket["trades"]+=1;bucket["net_usdt"]+=t["net_usdt"];bucket["fees_usdt"]+=t["commissions_usdt"]
+ for source in (reasons,regimes):
+  for bucket in source.values():
+   bucket["net_usdt"]=round(bucket["net_usdt"],2)
+   bucket["fees_usdt"]=round(bucket["fees_usdt"],2)
+ wins=[t["net_usdt"] for t in trades if t["net_usdt"]>0]
+ losses=[t["net_usdt"] for t in trades if t["net_usdt"]<=0]
+ return {"robot":robot,"trades":len(trades),"winning_trades":len(wins),"losing_trades":len(losses),
+         "net_usdt":round(sum(t["net_usdt"] for t in trades),2),
+         "gross_before_costs_usdt":round(sum(t["gross_before_costs_usdt"] for t in trades),2),
+         "commissions_usdt":round(sum(t["commissions_usdt"] for t in trades),2),
+         "slippage_usdt":round(sum(t["slippage_usdt"] for t in trades),2),
+         "avg_win_usdt":round(sum(wins)/len(wins),2) if wins else None,
+         "avg_loss_usdt":round(sum(losses)/len(losses),2) if losses else None,
+         "historical_net_per_trade_usdt":round(sum(t["net_usdt"] for t in trades)/len(trades),3) if trades else None,
+         "profit_factor":round(sum(wins)/abs(sum(losses)),3) if sum(losses)<0 else None,
+         "by_exit":reasons,"by_regime":regimes,"windows":per_window,
+         "reconciled":True,"note":"Five independent USD 1000 historical windows; totals are not compounded."}
+def execute_trade_ledger(robot):
+ try:
+  trades=[]
+  report=test_v6(lambda k,p:experiment_status.update(progress_pct=round(p,1),current_robot=k),
+                 robot_ids=[robot],windows="five",diagnostics=True,trade_log=trades)
+  summary=summarize_trade_ledger(trades,report,robot)
+  created=dt.datetime.now(dt.timezone.utc)
+  identifier=created.strftime("%Y%m%dT%H%M%S%f")
+  folder=DATA/"trade-ledger";folder.mkdir(parents=True,exist_ok=True)
+  payload={"status":"complete","version":"v6-trade-ledger-1","robot":robot,
+           "created_at":created.isoformat(),"source_engine":report["version"],
+           "execution_assumptions":report["assumptions"],"summary":summary,"trades":trades}
+  tmp=folder/("r"+str(robot)+"-"+identifier+".tmp")
+  tmp.write_text(json.dumps(payload,ensure_ascii=False,separators=(",",":")))
+  tmp.replace(folder/("r"+str(robot)+"-"+identifier+".json"))
+  experiment_status.update(state="complete",progress_pct=100,result_id=identifier,error=None)
+  print("TRADE LEDGER COMPLETE robot",robot,"trades",len(trades),"id",identifier,flush=True)
+ except Exception as e:
+  experiment_status.update(state="error",error=str(e))
+  traceback.print_exc()
+def start_trade_ledger(payload):
+ try:
+  robot=int(payload.get("robot"))
+  if robot not in (8,9,10):raise ValueError("Escolha um robô V6: 8, 9 ou 10")
+ except (TypeError,ValueError,AttributeError) as e:return 400,{"error":str(e)}
+ with experiment_lock:
+  if status.get("phase")!="complete":return 409,{"error":"Histórico ainda não está pronto"}
+  if experiment_status.get("state")=="running" or status.get("backtest")=="running":return 409,{"error":"Já existe uma análise em execução"}
+  if time.monotonic()-experiment_last_run[0]<60:return 429,{"error":"Aguarde um minuto entre análises"}
+  experiment_last_run[0]=time.monotonic()
+  experiment_status.update(state="running",mode="trade-ledger",progress_pct=0,current_robot=robot,error=None)
+  threading.Thread(target=execute_trade_ledger,args=(robot,),daemon=True).start()
+  return 202,{"status":"running","message":"Laboratório de operações iniciado","robot":robot}
+def latest_trade_ledger(robot):
+ folder=DATA/"trade-ledger"
+ items=sorted(folder.glob("r"+str(robot)+"-*.json"),reverse=True)[:1] if folder.exists() else []
+ return json.loads(items[0].read_text()) if items else None
+def trade_ledger_page(query):
+ try:
+  robot=int(query.get("robot",["9"])[0])
+  page=int(query.get("page",["1"])[0])
+  window=int(query.get("window",["0"])[0])
+  outcome=query.get("result",["all"])[0]
+  reason=query.get("reason",["all"])[0]
+  if robot not in (8,9,10) or page<1 or page>10000 or window not in range(6):
+   raise ValueError("Parâmetros de consulta inválidos")
+  if outcome not in ("all","win","loss"):raise ValueError("Resultado inválido")
+  if reason not in ("all","stop_loss","take_profit","max_hold","window_end","data_gap"):
+   raise ValueError("Motivo de saída inválido")
+ except (TypeError,ValueError,IndexError) as e:return 400,{"error":str(e)}
+ payload=latest_trade_ledger(robot)
+ if not payload:return 200,{"status":"missing","message":"Execute o laboratório para gerar operações individuais.","robot":robot}
+ trades=payload["trades"]
+ filtered=[t for t in trades if
+           (window==0 or t["window"]==window) and
+           (outcome=="all" or (t["net_usdt"]>0 if outcome=="win" else t["net_usdt"]<=0)) and
+           (reason=="all" or t["exit_reason"]==reason)]
+ filtered.reverse()
+ per_page=20
+ start=(page-1)*per_page
+ return 200,{"status":"complete","robot":robot,"created_at":payload["created_at"],"summary":payload["summary"],
+             "total_filtered":len(filtered),"page":page,"per_page":per_page,
+             "total_pages":max(1,(len(filtered)+per_page-1)//per_page),
+             "filters":{"window":window,"result":outcome,"reason":reason},
+             "trades":filtered[start:start+per_page]}
 def start_v6():
  with experiment_lock:
   if status.get("phase")!="complete":return 409,{"error":"Histórico ainda não está pronto"}
@@ -237,8 +334,17 @@ def start_experiment(payload):
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_POST(self):
   path=urllib.parse.urlsplit(self.path).path
-  if path not in ("/run-backtest","/run-experiment","/run-batch","/run-windows","/run-v5","/run-v6"):self.send_error(404);return
-  if path=="/run-v6":code,payload=start_v6()
+  if path not in ("/run-backtest","/run-experiment","/run-batch","/run-windows","/run-v5","/run-v6","/run-trade-ledger"):self.send_error(404);return
+  if path=="/run-trade-ledger":
+   try:
+    length=int(self.headers.get("Content-Length","0"))
+    if length<2 or length>1024:raise ValueError("Tamanho inválido")
+    request=json.loads(self.rfile.read(length))
+    if not isinstance(request,dict):raise ValueError("Formato inválido")
+   except (ValueError,TypeError,json.JSONDecodeError):
+    self.send_error(400);return
+   code,payload=start_trade_ledger(request)
+  elif path=="/run-v6":code,payload=start_v6()
   elif path=="/run-v5":code,payload=start_v5()
   elif path in ("/run-experiment","/run-batch","/run-windows"):
    try:
@@ -254,7 +360,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
   self.send_response(code);self.send_header("Content-Type","application/json");self.send_header("Content-Length",str(len(body)));self.end_headers();self.wfile.write(body)
  def do_GET(self):
   path=urllib.parse.urlsplit(self.path).path
-  if path not in ("/","/health","/status","/backtest","/backtest-v2","/backtest-v3","/experiment-status","/experiments","/windows","/v5","/v6","/cost-audit"):
+  if path not in ("/","/health","/status","/backtest","/backtest-v2","/backtest-v3","/experiment-status","/experiments","/windows","/v5","/v6","/cost-audit","/trade-ledger"):
    self.send_error(404);return
   if path=="/":
    body=(pathlib.Path(__file__).parent/"dashboard.html").read_bytes()
@@ -263,6 +369,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
   records=json.loads(manifest.read_text()) if manifest.exists() else []
   payload={**status,"months_verified":len(records),"candles_verified":sum(x["rows"] for x in records),"gap_events":sum(len(x.get("gaps",[])) for x in records),"last_month":records[-1]["month"] if records else None,"note":"Historical research only; no live trading"}
   if path=="/experiment-status":payload=experiment_status.copy()
+  if path=="/trade-ledger":
+   code,payload=trade_ledger_page(urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query))
+   if code!=200:
+    body=json.dumps(payload).encode()
+    self.send_response(code);self.send_header("Content-Type","application/json");self.send_header("Content-Length",str(len(body)));self.end_headers();self.wfile.write(body);return
   if path=="/cost-audit":
    folder=DATA/"v6"
    items=sorted(folder.glob("*.json"),reverse=True)[:1] if folder.exists() else []
