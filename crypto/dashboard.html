@@ -96,6 +96,23 @@ a:hover{text-decoration:underline}
   <div class="verdict" id="v8Verdict">—</div>
   <div class="meta" id="v8Meta">Este é um teste técnico sintético e não representa lucro no mercado real.</div>
  </section>
+ <section class="card v8-card" aria-label="Teste disponível V9">
+  <div class="version-top"><span class="version">V9</span><span class="tag">● Disponível</span></div>
+  <p>Replay de candles <strong>reais e históricos</strong> do BTC/USDT. Verifica sinais naturais, filtro ATR e operações simuladas, sem forçar compras.</p>
+  <button class="primary" id="testV9" type="button">▶ Testar V9</button>
+  <div class="hint">Histórico já analisado · Somente simulação · Sem dinheiro real.</div>
+ </section>
+ <section class="result" id="v9Result" hidden aria-live="polite">
+  <div class="result-head"><div><h2>Resultado do teste V9</h2><p id="v9Time">Replay histórico com preços reais</p></div><span id="v9Status" class="result-pill">Verificando</span></div>
+  <div class="metrics">
+   <div class="metric"><span class="key">Candles reais</span><strong id="v9Candles">—</strong><small id="v9Source">Histórico BTC/USDT</small></div>
+   <div class="metric"><span class="key">Verificações</span><strong id="v9Checks">—</strong><small>Integridade do replay</small></div>
+   <div class="metric"><span class="key">Sinais / operações</span><strong id="v9Signals">—</strong><small id="v9Gate">Sem sinais forçados</small></div>
+   <div class="metric"><span class="key">Resultado virtual</span><strong id="v9Net">—</strong><small id="v9Equity">Capital inicial US$ 1.000</small></div>
+  </div>
+  <div class="verdict" id="v9Verdict">—</div>
+  <div class="meta" id="v9Meta">O replay não altera o monitoramento prospectivo da V7.</div>
+ </section>
 </main>
 <footer><span>BTC Scalper AI · Somente paper trading</span><a href="/laboratorio">Histórico técnico</a></footer>
 </div>
@@ -187,7 +204,40 @@ async function testV8(){
  }finally{button.disabled=false;button.textContent='↻ Testar V8 novamente'}
 }
 byId('testV7').addEventListener('click',testV7);
+async function testV9(){
+ const button=byId('testV9');button.disabled=true;button.textContent='Analisando candles reais…';
+ const area=byId('v9Result');area.hidden=false;
+ set('v9Time','Executando a estratégia congelada sobre candles já encerrados…');
+ set('v9Status','Executando');byId('v9Status').className='result-pill';
+ try{
+  const response=await fetch('/test-v9',{method:'POST',cache:'no-store'});
+  const data=await response.json();
+  if(!response.ok||data.version!=='V9')throw Error(data.error||'Replay histórico indisponível');
+  const passed=data.status==='passed'&&data.checks_passed===data.checks_total&&data.uses_real_historical_prices===true&&data.signals_forced===false&&data.executes_exchange_orders===false&&data.writes_v7_state===false;
+  set('v9Time','Teste em '+new Date().toLocaleString('pt-BR',{dateStyle:'short',timeStyle:'short'})+' · Dados históricos');
+  set('v9Status',passed?'Replay OK':'REVISAR');byId('v9Status').className='result-pill'+(passed?'':' fail');
+  set('v9Candles',integer(data.replayed_candles));
+  set('v9Source','Binance Vision · '+data.source_month+' · '+dateTime(data.from_utc)+' a '+dateTime(data.to_utc));
+  set('v9Checks',data.checks_passed+' / '+data.checks_total);
+  set('v9Signals',integer(data.signals)+' / '+integer(data.trades_closed));
+  set('v9Gate',integer(data.atr_blocked)+' sinais barrados pelo ATR · '+(data.open_position?'posição virtual aberta':'sem posição'));
+  set('v9Net',money(data.marked_pnl_usdt));
+  set('v9Equity','Patrimônio: '+money(data.marked_equity_usdt)+' · Taxas: '+money(data.fees_usdt));
+  if(!passed)set('v9Verdict','ATENÇÃO: replay com inconsistência. Não aprovar até corrigir as verificações: '+(data.failed_checks||[]).join(', '));
+  else if(Number(data.trades_closed)===0)set('v9Verdict','Replay técnico concluído com candles históricos reais. Nenhuma operação virtual foi encerrada neste intervalo; isso não mede rentabilidade. A estratégia não força sinais.');
+  else set('v9Verdict','Replay técnico concluído com operações simuladas a partir de sinais naturais. O resultado é retrospectivo, em histórico já analisado; não comprova lucratividade futura.');
+  set('v9Meta','Regra ATR V7 congelada · Sem ordens reais · Sem sinais forçados · V7 e V8 intactas. Histórico conhecido, não teste prospectivo.');
+  set('status',passed?'● V9 · REPLAY OK':'● V9 · REVISAR');
+ }catch(error){
+  set('v9Time','Não foi possível executar o replay');set('v9Status','ERRO');
+  byId('v9Status').className='result-pill fail';
+  set('v9Candles','—');set('v9Checks','—');set('v9Signals','—');set('v9Net','—');
+  set('v9Verdict','Falha na V9: '+error.message+'. Não usar este resultado para avaliar a estratégia.');
+  set('status','● V9 · TESTE INDISPONÍVEL');
+ }finally{button.disabled=false;button.textContent='↻ Testar V9 novamente'}
+}
 byId('testV8').addEventListener('click',testV8);
+byId('testV9').addEventListener('click',testV9);
 </script>
 </body>
 </html>
