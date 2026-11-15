@@ -17,7 +17,7 @@ def fetch(url):
  with urllib.request.urlopen(req,timeout=90) as response:return response.read()
 def run(start,end,out,symbol):
  out.mkdir(parents=True,exist_ok=True)
- manifest=[]
+ manifest_path=out/f"{symbol}-manifest.json"\n manifest=json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else []\n manifest=[entry for entry in manifest if (out/pathlib.Path(entry["file"]).name).exists()]
  for month in months(start,end):
   name=f"{symbol}-1m-{month}.zip"; url=f"{BASE}/{symbol}/1m/{name}"
   dest=out/f"{symbol}-1m-{month}.csv"
@@ -30,7 +30,7 @@ def run(start,end,out,symbol):
    with zipfile.ZipFile(io.BytesIO(archive)) as z:
     members=[x for x in z.namelist() if x.endswith(".csv")]
     if len(members)!=1:raise ValueError("ZIP inesperado")
-    count=0;first=None;last=None;previous=None
+    count=0;first=None;last=None;previous=None;gaps=[]
     tmp=dest.with_suffix(".tmp")
     try:
      with z.open(members[0]) as source,open(tmp,"w",newline="",encoding="utf-8") as output:
@@ -43,7 +43,7 @@ def run(start,end,out,symbol):
        timestamp=dt.datetime.fromtimestamp(ms/1000,dt.timezone.utc)
        o,h,l,c,v=map(float,row[1:6])
        if min(o,h,l,c)<=0 or v<0 or h<max(o,c) or l>min(o,c):raise ValueError("OHLCV inválido")
-       if previous is not None and ms-previous!=60000:raise ValueError(f"Intervalo irregular: {ms-previous} ms")
+       if previous is not None and ms<=previous:raise ValueError("Candles fora de ordem ou duplicados")\n       if previous is not None and ms-previous!=60000:gaps.append({"after_ms":previous,"before_ms":ms,"missing_candles":(ms-previous)//60000-1})
        previous=ms;first=first or timestamp;last=timestamp
        writer.writerow([timestamp.isoformat().replace("+00:00","Z"),row[1],row[2],row[3],row[4],row[5]])
        count+=1
@@ -52,9 +52,9 @@ def run(start,end,out,symbol):
      if tmp.exists():tmp.unlink()
    manifest.append({"month":month,"rows":count,"first_utc":first.isoformat(),"last_utc":last.isoformat(),"sha256":actual,"file":str(dest)})
    (out/"manifest.json").write_text(json.dumps(manifest,indent=2,ensure_ascii=False),encoding="utf-8")
-   print(f"OK {month}: {count} candles")
+   print(f"OK {month}: {count} candles, {len(gaps)} lacunas registradas")
   except (urllib.error.HTTPError,urllib.error.URLError,ValueError,zipfile.BadZipFile) as e:
    print(f"FALHOU {month}: {e}")
- print("Concluído. Arquivos mensais disponíveis em",out)
+ print("Concluído. Arquivos mensais disponíveis em",out)\n print("Meses validados:",len(manifest),"/",len(list(months(start,end))))
 if __name__=="__main__":
  p=argparse.ArgumentParser();p.add_argument("--start",default="2021-11");p.add_argument("--end",default="2026-10");p.add_argument("--out",type=pathlib.Path,default=pathlib.Path("data/crypto"));p.add_argument("--symbol",choices=["BTCUSDT","ETHUSDT"],default="BTCUSDT");a=p.parse_args();run(a.start,a.end,a.out,a.symbol)
