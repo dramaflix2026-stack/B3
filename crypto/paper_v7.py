@@ -222,6 +222,7 @@ def process_candle(state, candle):
             state["fees"] += exit_fee
             state["slippage"] += slip
             state["realized"] += net
+            state["total_trades"] = int(state.get("total_trades", len(state["trades"]))) + 1
             state["trades"].append({
                 "entry_utc": utc_iso(p["open_ms"]), "exit_utc": utc_iso(ms),
                 "entry_price_usdt": round(p["price"], 4),
@@ -235,7 +236,6 @@ def process_candle(state, candle):
                 "atr_signal_pct": round(p["atr_signal_pct"], 6),
             })
             state["trades"] = state["trades"][-500:]
-            state["total_trades"] = int(state.get("total_trades", len(state["trades"])-1)) + 1
             state["btc"] = 0.0
             state["entry"] = None
             state["cool"] = COOLDOWN_MINUTES
