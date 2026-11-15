@@ -14,6 +14,7 @@ from v8_execution_test import run as run_v8_synthetic
 from v9_historical_replay import run as run_v9_historical
 from v10_signal_diagnostics import run as run_v10_diagnostics
 from v11_breakout_audit import run as run_v11_audit
+from v12_loss_diagnostics import run as run_v12_losses
 DATA=pathlib.Path(os.environ.get("CRYPTO_DATA_DIR","/data/crypto"))
 START=os.environ.get("CRYPTO_START","2021-11")
 END=os.environ.get("CRYPTO_END","2026-10")
@@ -372,8 +373,14 @@ def start_experiment(payload):
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_POST(self):
   path=urllib.parse.urlsplit(self.path).path
-  if path not in ("/run-backtest","/run-experiment","/run-batch","/run-windows","/run-v5","/run-v6","/run-trade-ledger","/run-v7","/test-v8","/test-v9","/test-v10","/test-v11"):self.send_error(404);return
-  if path=="/test-v11":
+  if path not in ("/run-backtest","/run-experiment","/run-batch","/run-windows","/run-v5","/run-v6","/run-trade-ledger","/run-v7","/test-v8","/test-v9","/test-v10","/test-v11","/test-v12"):self.send_error(404);return
+  if path=="/test-v12":
+   try:
+    payload=run_v12_losses()
+    code=200 if payload["status"]=="passed" else 422
+   except Exception as exc:
+    code,payload=500,{"version":"V12","status":"error","error":type(exc).__name__+": "+str(exc)[:150]}
+  elif path=="/test-v11":
    try:
     payload=run_v11_audit()
     code=200 if payload["status"]=="passed" else 422
