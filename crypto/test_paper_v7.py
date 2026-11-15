@@ -501,8 +501,8 @@ class PaperV7Tests(unittest.TestCase):
                     self.buttons.append(attrs)
         page=Page();page.feed(main)
         self.assertEqual(len(page.ids),len(set(page.ids)))
-        self.assertEqual(len(page.buttons),5,"One test button per implemented version")
-        self.assertEqual([btn.get("id") for btn in page.buttons],["testV7","testV8","testV9","testV10","testV11"])
+        self.assertEqual(len(page.buttons),6,"One test button per implemented version")
+        self.assertEqual([btn.get("id") for btn in page.buttons],["testV7","testV8","testV9","testV10","testV11","testV12"])
         self.assertIn("▶ Testar V7",main)
         self.assertIn('id="testResult" hidden',main)
         self.assertIn("fetch('/paper-v7'",main)
@@ -512,6 +512,8 @@ class PaperV7Tests(unittest.TestCase):
         self.assertIn("Testar V9",main)
         self.assertIn("Testar V10",main)
         self.assertIn("Testar V11",main)
+        self.assertIn("Testar V12",main)
+        self.assertIn("fetch(\'/test-v12\'",main)
         self.assertIn("fetch(\'/test-v11\'",main)
         self.assertIn("fetch(\'/test-v10\'",main)
         self.assertIn("fetch(\'/test-v9\'",main)
@@ -545,6 +547,7 @@ class PaperV7Tests(unittest.TestCase):
                 self.assertIn('id="testV9"',html)
                 self.assertIn('id="testV10"',html)
                 self.assertIn('id="testV11"',html)
+                self.assertIn('id="testV12"',html)
                 self.assertNotIn('id="runbtn"',html)
             with urllib.request.urlopen(base+"/laboratorio",timeout=4) as response:
                 self.assertEqual(response.status,200)
@@ -790,6 +793,60 @@ class PaperV7Tests(unittest.TestCase):
         finally:
             server.shutdown();server.server_close();thread.join(3)
             paper.DATA=original_data
+
+    def test_v12_loss_ledger_reconciles_and_keeps_v7_untouched(self):
+        from v12_loss_diagnostics import run
+        root=self._make_v9_fixture()
+        paper.atomic_save(self.state)
+        original=paper.STATE_FILE.read_bytes()
+        result=run(data_dir=root)
+        self.assertEqual(result["version"],"V12")
+        self.assertEqual(result["status"],"passed",result)
+        self.assertEqual(result["checks_passed"],result["checks_total"])
+        self.assertEqual(result["candles_analyzed"],199)
+        self.assertEqual(len(result["variants"]),5)
+        for variant in result["variants"]:
+            self.assertEqual(variant["stop_count"]+variant["time_count"],variant["trades_closed"])
+            self.assertEqual(len(variant["trades"]),variant["trades_closed"])
+            self.assertTrue(variant["ledger_reconciles"])
+        self.assertFalse(result["out_of_sample"])
+        self.assertFalse(result["writes_v7_state"])
+        self.assertEqual(paper.STATE_FILE.read_bytes(),original)
+
+    def test_v12_gap_rejected_without_mutating_v7(self):
+        from v12_loss_diagnostics import run
+        root=self._make_v9_fixture(bad_gap=True)
+        paper.atomic_save(self.state)
+        original=paper.STATE_FILE.read_bytes()
+        with self.assertRaisesRegex(ValueError,"Lacuna"):
+            run(data_dir=root)
+        self.assertEqual(paper.STATE_FILE.read_bytes(),original)
+
+    def test_v12_http_endpoint_isolated(self):
+        import http.server
+        import json
+        import threading
+        import urllib.request
+        import collector_service
+        root=self._make_v9_fixture()
+        paper.atomic_save(self.state)
+        original=paper.STATE_FILE.read_bytes()
+        old=paper.DATA
+        paper.DATA=root
+        server=http.server.ThreadingHTTPServer(("127.0.0.1",0),collector_service.Handler)
+        thread=threading.Thread(target=server.serve_forever,daemon=True)
+        thread.start()
+        try:
+            req=urllib.request.Request("http://127.0.0.1:"+str(server.server_address[1])+"/test-v12",data=b"",method="POST")
+            with urllib.request.urlopen(req,timeout=10) as response:
+                self.assertEqual(response.status,200)
+                result=json.load(response)
+            self.assertEqual(result["version"],"V12")
+            self.assertEqual(result["status"],"passed",result)
+            self.assertEqual(paper.STATE_FILE.read_bytes(),original)
+        finally:
+            server.shutdown();server.server_close();thread.join(3)
+            paper.DATA=old
 
     def test_atomic_persistence_and_readonly_snapshot(self):
         paper.atomic_save(self.state)
